@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "まなびリズム",
+    "slug": "manabi-rhythm",
+    "scheme": "manabi-rhythm",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "../public/images/mascot.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "../public/images/mascot.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nextedovation.manabi_ai",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "学習の質問に画像を添付するために写真へのアクセスが必要です。"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "../public/images/mascot.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "favicon": "../public/images/mascot.png"
+    }
+  }
+}
