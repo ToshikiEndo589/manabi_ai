@@ -87,13 +87,15 @@ ai-yobikou/
 │   ├── layout.tsx           # ルートレイアウト
 │   └── page.tsx             # ルートページ（/loginにリダイレクト）
 ├── components/
-│   ├── ui/                  # shadcn uiコンポーネント
+│   ├── ui/                  # shadcn uiコンポーネント（card, button, input, label 等）
 │   ├── bottom-nav.tsx       # ボトムナビゲーション
-│   ├── heatmap.tsx          # ヒートマップコンポーネント
-│   ├── subject-chart.tsx    # 科目別グラフコンポーネント
+│   ├── category-stacked-chart.tsx  # 記録画面の科目別棒グラフ
+│   ├── reference-book-chart.tsx    # 記録画面の教材別グラフ
+│   └── …                    # その他（streak-display, daily-goal-card 等）
 ├── lib/
 │   ├── supabase/            # Supabaseクライアント
-│   ├── openai.ts            # OpenAI API クライアント（準備済み）
+│   ├── date-utils.ts        # 日付ユーティリティ
+│   ├── gamification.ts      # 連続記録・目標計算
 │   └── utils.ts             # ユーティリティ関数
 ├── types/
 │   └── database.ts          # データベース型定義
