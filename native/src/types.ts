@@ -5,6 +5,15 @@ export type Profile = {
   current_deviation: number
   target_deviation: number
   exam_date: string | null
+  weekday_target_minutes?: number | null
+  weekend_target_minutes?: number | null
+  today_target_minutes?: number | null
+  today_target_date?: string | null
+  week_target_minutes?: number | null
+  week_target_date?: string | null
+  month_target_minutes?: number | null
+  month_target_date?: string | null
+  avatar_url?: string | null
   onboarding_completed: boolean
   created_at?: string | null
   updated_at?: string | null

@@ -16,10 +16,12 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.nextedovation.manabi_ai",
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "学習の質問に画像を添付するために写真へのアクセスが必要です。"
+        "NSPhotoLibraryUsageDescription": "学習の質問に画像を添付するために写真へのアクセスが必要です。",
+        "NSCameraUsageDescription": "学習の質問に画像を添付するためにカメラへのアクセスが必要です。"
       }
     },
     "android": {
+      "permissions": ["CAMERA", "READ_MEDIA_IMAGES"],
       "adaptiveIcon": {
         "foregroundImage": "../public/images/mascot.png",
         "backgroundColor": "#ffffff"

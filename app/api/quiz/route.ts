@@ -14,8 +14,18 @@ type QuizQuestion = {
 
 export async function POST(req: NextRequest) {
   try {
-    const { note, count } = await req.json()
+    const { note, count, difficulty } = await req.json()
     const questionCount = Number.isFinite(count) ? Math.min(Math.max(count, 1), 5) : 3
+    const normalizedDifficulty =
+      difficulty === 'easy' || difficulty === 'normal' || difficulty === 'hard'
+        ? difficulty
+        : 'normal'
+    const difficultyText =
+      normalizedDifficulty === 'easy'
+        ? '易しい（基本・基礎中心）'
+        : normalizedDifficulty === 'hard'
+          ? '難しい（応用・ひっかけ含む）'
+          : '普通（標準レベル）'
 
     if (!note || typeof note !== 'string' || note.trim().length === 0) {
       return NextResponse.json({ error: 'note is required' }, { status: 400 })
@@ -24,6 +34,7 @@ export async function POST(req: NextRequest) {
     const instructions =
       'あなたは受験生向けの復習クイズ作成AIです。' +
       'ユーザーの学習内容から4択問題を作成してください。' +
+      `難易度は${difficultyText}に合わせてください。` +
       '必ずJSONのみで出力し、形式は次の通りです。' +
       '{"questions":[{"question":"...","choices":["...","...","...","..."],"correct_index":0,"explanation":"..."}]}' +
       'choicesは必ず4つ、correct_indexは0-3の整数、explanationは簡潔に。'
@@ -34,7 +45,12 @@ export async function POST(req: NextRequest) {
       input: [
         {
           role: 'user',
-          content: [{ type: 'input_text', text: `学習内容:\n${note}\n\n問題数:${questionCount}` }],
+          content: [
+            {
+              type: 'input_text',
+              text: `学習内容:\n${note}\n\n問題数:${questionCount}\n難易度:${difficultyText}`,
+            },
+          ],
         },
       ],
       max_output_tokens: 700,
