@@ -76,8 +76,12 @@ export default function SettingsPage() {
             setAvatarUrl(profile.avatar_url)
           }
         }
-      } catch (err: any) {
-        setError(err.message || 'プロフィールの読み込みに失敗しました')
+      } catch (err: unknown) {
+        if (err instanceof Error) {
+          setError(err.message || 'プロフィールの読み込みに失敗しました')
+        } else {
+          setError('プロフィールの読み込みに失敗しました')
+        }
       } finally {
         setIsLoadingProfile(false)
       }
@@ -113,8 +117,12 @@ export default function SettingsPage() {
 
       router.refresh()
       alert('設定を更新しました')
-    } catch (err: any) {
-      setError(err.message || 'エラーが発生しました')
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message || 'エラーが発生しました')
+      } else {
+        setError('エラーが発生しました')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -163,8 +171,12 @@ export default function SettingsPage() {
 
       setAvatarUrl(publicUrl)
       alert('アイコンを更新しました')
-    } catch (err: any) {
-      alert(err.message || 'アイコンのアップロードに失敗しました')
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        alert(err.message || 'アイコンのアップロードに失敗しました')
+      } else {
+        alert('アイコンのアップロードに失敗しました')
+      }
     } finally {
       setIsUploadingAvatar(false)
       if (avatarInputRef.current) {
@@ -179,8 +191,12 @@ export default function SettingsPage() {
       await supabase.auth.signOut()
       router.push('/login')
       router.refresh()
-    } catch (err: any) {
-      setError(err.message || 'ログアウトに失敗しました')
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message || 'ログアウトに失敗しました')
+      } else {
+        setError('ログアウトに失敗しました')
+      }
     }
   }
 

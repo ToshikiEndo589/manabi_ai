@@ -16,7 +16,7 @@ import { supabase } from '../lib/supabase'
 import type { Profile, StudyLog } from '../types'
 import { formatMinutes } from '../lib/format'
 import { calculateStreak } from '../lib/gamification'
-import { getThisMonthStart, getThisWeekStart, getTodayStart } from '../lib/date'
+import { getThisMonthStart, getThisWeekStart, getTodayStart, getStudyDay } from '../lib/date'
 
 const mascotUrl = (baseUrl?: string) =>
   `${(baseUrl || 'https://ai-yobikou.vercel.app').replace(/\/$/, '')}/images/mascot.png`
@@ -33,24 +33,43 @@ export function HomeScreen() {
   const [monthOverride, setMonthOverride] = useState('')
 
   const loadData = useCallback(async () => {
+    console.log('=== Loading Data ===')
     const [profileResult, logsResult] = await Promise.all([
       supabase.from('profiles').select('*').eq('user_id', userId).single(),
       supabase.from('study_logs').select('*').eq('user_id', userId).order('started_at', { ascending: false }),
     ])
+    console.log('Profile result:', profileResult.data)
+    console.log('Logs result count:', logsResult.data?.length || 0)
+    console.log('Logs result sample:', logsResult.data?.slice(0, 3))
+
     if (profileResult.data) {
       setProfile(profileResult.data as Profile)
-      const todayStr = getLocalDateString()
+
+      // getTodayStart()などが返すDateオブジェクトのUTC日付部分を使用
+      const today = getTodayStart()
+      const week = getThisWeekStart()
+      const month = getThisMonthStart()
+
+      const todayStr = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(today.getUTCDate()).padStart(2, '0')}`
+      const weekStr = `${week.getUTCFullYear()}-${String(week.getUTCMonth() + 1).padStart(2, '0')}-${String(week.getUTCDate()).padStart(2, '0')}`
+      const monthStr = `${month.getUTCFullYear()}-${String(month.getUTCMonth() + 1).padStart(2, '0')}-${String(month.getUTCDate()).padStart(2, '0')}`
+
+      console.log('Date strings - today:', todayStr, 'week:', weekStr, 'month:', monthStr)
+      console.log('Profile week_target_date:', profileResult.data.week_target_date)
+      console.log('Profile week_target_minutes:', profileResult.data.week_target_minutes)
+
       if (profileResult.data.today_target_date === todayStr && profileResult.data.today_target_minutes) {
         setTodayOverride(String(profileResult.data.today_target_minutes))
       }
-      if (profileResult.data.week_target_minutes) {
+      if (profileResult.data.week_target_date === weekStr && profileResult.data.week_target_minutes) {
         setWeekOverride(String(profileResult.data.week_target_minutes))
       }
-      if (profileResult.data.month_target_minutes) {
+      if (profileResult.data.month_target_date === monthStr && profileResult.data.month_target_minutes) {
         setMonthOverride(String(profileResult.data.month_target_minutes))
       }
     }
     setStudyLogs((logsResult.data || []) as StudyLog[])
+    console.log('===================')
   }, [userId])
 
   useEffect(() => {
@@ -67,19 +86,44 @@ export function HomeScreen() {
     const todayStart = getTodayStart()
     const weekStart = getThisWeekStart()
     const monthStart = getThisMonthStart()
+
+    // UTC日付部分を使用
+    const todayStr = `${todayStart.getUTCFullYear()}-${String(todayStart.getUTCMonth() + 1).padStart(2, '0')}-${String(todayStart.getUTCDate()).padStart(2, '0')}`
+    const weekStr = `${weekStart.getUTCFullYear()}-${String(weekStart.getUTCMonth() + 1).padStart(2, '0')}-${String(weekStart.getUTCDate()).padStart(2, '0')}`
+    const monthStr = `${monthStart.getUTCFullYear()}-${String(monthStart.getUTCMonth() + 1).padStart(2, '0')}-${String(monthStart.getUTCDate()).padStart(2, '0')}`
+
+    console.log('=== HomeScreen Debug ===')
+    console.log('todayStr:', todayStr, 'weekStr:', weekStr, 'monthStr:', monthStr)
+    console.log('studyLogs count:', studyLogs.length)
+
     const today = studyLogs.reduce((sum, log) => {
-      const date = new Date(log.started_at)
-      return date >= todayStart ? sum + log.study_minutes : sum
+      const logDay = getStudyDay(new Date(log.started_at))
+      const isToday = logDay === todayStr
+      if (studyLogs.length <= 5) {
+        console.log(`Log: ${log.study_minutes}分, started_at: ${log.started_at}, logDay: ${logDay}, isToday: ${isToday}`)
+      }
+      return isToday ? sum + log.study_minutes : sum
     }, 0)
+
     const week = studyLogs.reduce((sum, log) => {
-      const date = new Date(log.started_at)
-      return date >= weekStart ? sum + log.study_minutes : sum
+      const logDay = getStudyDay(new Date(log.started_at))
+      const isThisWeek = logDay >= weekStr
+      if (studyLogs.length <= 5) {
+        console.log(`Log: ${log.study_minutes}分, logDay: ${logDay}, weekStr: ${weekStr}, isThisWeek: ${isThisWeek}`)
+      }
+      return isThisWeek ? sum + log.study_minutes : sum
     }, 0)
+
     const month = studyLogs.reduce((sum, log) => {
-      const date = new Date(log.started_at)
-      return date >= monthStart ? sum + log.study_minutes : sum
+      const logDay = getStudyDay(new Date(log.started_at))
+      return logDay >= monthStr ? sum + log.study_minutes : sum
     }, 0)
+
     const total = studyLogs.reduce((sum, log) => sum + log.study_minutes, 0)
+
+    console.log('Results - today:', today, 'week:', week, 'month:', month, 'total:', total)
+    console.log('======================')
+
     return { todayMinutes: today, weekMinutes: week, monthMinutes: month, totalMinutes: total }
   }, [studyLogs])
 
@@ -100,7 +144,8 @@ export function HomeScreen() {
     const defaultTarget = isWeekend
       ? profile.weekend_target_minutes ?? 120
       : profile.weekday_target_minutes ?? 60
-    const todayStr = getLocalDateString()
+    const todayStart = getTodayStart()
+    const todayStr = `${todayStart.getUTCFullYear()}-${String(todayStart.getUTCMonth() + 1).padStart(2, '0')}-${String(todayStart.getUTCDate()).padStart(2, '0')}`
     if (profile.today_target_date === todayStr && profile.today_target_minutes) {
       return profile.today_target_minutes
     }
@@ -109,13 +154,21 @@ export function HomeScreen() {
 
   const weekTarget = useMemo(() => {
     if (!profile) return 420
-    if (profile.week_target_minutes) return profile.week_target_minutes
+    const weekStart = getThisWeekStart()
+    const weekStr = `${weekStart.getUTCFullYear()}-${String(weekStart.getUTCMonth() + 1).padStart(2, '0')}-${String(weekStart.getUTCDate()).padStart(2, '0')}`
+    if (profile.week_target_date === weekStr && profile.week_target_minutes) {
+      return profile.week_target_minutes
+    }
     return (profile.weekday_target_minutes ?? 60) * 5 + (profile.weekend_target_minutes ?? 120) * 2
   }, [profile])
 
   const monthTarget = useMemo(() => {
     if (!profile) return 1800
-    if (profile.month_target_minutes) return profile.month_target_minutes
+    const monthStart = getThisMonthStart()
+    const monthStr = `${monthStart.getUTCFullYear()}-${String(monthStart.getUTCMonth() + 1).padStart(2, '0')}-${String(monthStart.getUTCDate()).padStart(2, '0')}`
+    if (profile.month_target_date === monthStr && profile.month_target_minutes) {
+      return profile.month_target_minutes
+    }
     const daily = profile.weekday_target_minutes ?? 60
     const weekend = profile.weekend_target_minutes ?? 120
     return daily * 22 + weekend * 8
@@ -129,12 +182,18 @@ export function HomeScreen() {
     if (type === 'today') setIsSavingToday(true)
     if (type === 'week') setIsSavingWeek(true)
     if (type === 'month') setIsSavingMonth(true)
+    const todayStart = getTodayStart()
+    const weekStart = getThisWeekStart()
+    const monthStart = getThisMonthStart()
+    const todayStr = `${todayStart.getUTCFullYear()}-${String(todayStart.getUTCMonth() + 1).padStart(2, '0')}-${String(todayStart.getUTCDate()).padStart(2, '0')}`
+    const weekStr = `${weekStart.getUTCFullYear()}-${String(weekStart.getUTCMonth() + 1).padStart(2, '0')}-${String(weekStart.getUTCDate()).padStart(2, '0')}`
+    const monthStr = `${monthStart.getUTCFullYear()}-${String(monthStart.getUTCMonth() + 1).padStart(2, '0')}-${String(monthStart.getUTCDate()).padStart(2, '0')}`
     const payload =
       type === 'today'
-        ? { today_target_minutes: value, today_target_date: getLocalDateString() }
+        ? { today_target_minutes: value, today_target_date: todayStr }
         : type === 'week'
-          ? { week_target_minutes: value, week_target_date: getLocalDateString(getThisWeekStart()) }
-          : { month_target_minutes: value, month_target_date: getLocalDateString(getThisMonthStart()) }
+          ? { week_target_minutes: value, week_target_date: weekStr }
+          : { month_target_minutes: value, month_target_date: monthStr }
     await supabase.from('profiles').update({ ...payload, updated_at: new Date().toISOString() }).eq('user_id', userId)
     setProfile({ ...profile, ...payload })
     setIsSavingToday(false)
@@ -149,125 +208,119 @@ export function HomeScreen() {
       keyboardVerticalOffset={80}
     >
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <View style={[styles.card, styles.mascotCard]}>
-        <View style={styles.mascotRow}>
-          <View style={styles.mascotCircle}>
-            <Image source={{ uri: mascotUrl(process.env.EXPO_PUBLIC_API_BASE_URL) }} style={styles.mascotImage} />
-          </View>
-          <View style={styles.balloon}>
-            <Text style={styles.balloonText}>{comment}</Text>
+        <View style={[styles.card, styles.mascotCard]}>
+          <View style={styles.mascotRow}>
+            <View style={styles.mascotCircle}>
+              <Image source={{ uri: mascotUrl(process.env.EXPO_PUBLIC_API_BASE_URL) }} style={styles.mascotImage} />
+            </View>
+            <View style={styles.balloon}>
+              <Text style={styles.balloonText}>{comment}</Text>
+            </View>
           </View>
         </View>
-      </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>今日の目標</Text>
-        <ProgressRow label="目標" value={`${dailyTarget}分`} />
-        <ProgressBar progress={Math.min(100, Math.round((todayMinutes / Math.max(1, dailyTarget)) * 100))} />
-        <Text style={styles.mutedText}>
-          今日の学習: {todayMinutes}分 / 達成率 {Math.min(100, Math.round((todayMinutes / Math.max(1, dailyTarget)) * 100))}%
-        </Text>
-        <View style={styles.inlineRow}>
-          <View style={styles.flex}>
-            <Text style={styles.smallLabel}>今日の目標を変更</Text>
-            <TextInput
-              style={styles.input}
-              placeholder={`${dailyTarget}`}
-              keyboardType="numeric"
-              value={todayOverride}
-              onChangeText={setTodayOverride}
-            />
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>今日の目標</Text>
+          <ProgressRow label="目標" value={`${dailyTarget}分`} />
+          <ProgressBar progress={Math.min(100, Math.round((todayMinutes / Math.max(1, dailyTarget)) * 100))} />
+          <Text style={styles.mutedText}>
+            今日の学習: {todayMinutes}分 / 達成率 {Math.min(100, Math.round((todayMinutes / Math.max(1, dailyTarget)) * 100))}%
+          </Text>
+          <View style={styles.inlineRow}>
+            <View style={styles.flex}>
+              <Text style={styles.smallLabel}>今日の目標を変更</Text>
+              <TextInput
+                style={styles.input}
+                placeholder={`${dailyTarget}`}
+                keyboardType="numeric"
+                value={todayOverride}
+                onChangeText={setTodayOverride}
+              />
+            </View>
+            <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('today')} disabled={isSavingToday}>
+              <Text style={styles.primaryButtonText}>{isSavingToday ? '保存中...' : '更新'}</Text>
+            </Pressable>
           </View>
-          <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('today')} disabled={isSavingToday}>
-            <Text style={styles.primaryButtonText}>{isSavingToday ? '保存中...' : '更新'}</Text>
-          </Pressable>
         </View>
-      </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>今週の目標</Text>
-        <ProgressRow label="今週の目標" value={`${weekTarget}分`} />
-        <ProgressBar progress={Math.min(100, Math.round((weekMinutes / Math.max(1, weekTarget)) * 100))} />
-        <Text style={styles.mutedText}>
-          今週の学習: {weekMinutes}分 / 達成率 {Math.min(100, Math.round((weekMinutes / Math.max(1, weekTarget)) * 100))}%
-        </Text>
-        <View style={styles.inlineRow}>
-          <View style={styles.flex}>
-            <Text style={styles.smallLabel}>今週の目標を変更</Text>
-            <TextInput
-              style={styles.input}
-              placeholder={`${weekTarget}`}
-              keyboardType="numeric"
-              value={weekOverride}
-              onChangeText={setWeekOverride}
-            />
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>今週の目標</Text>
+          <ProgressRow label="今週の目標" value={`${weekTarget}分`} />
+          <ProgressBar progress={Math.min(100, Math.round((weekMinutes / Math.max(1, weekTarget)) * 100))} />
+          <Text style={styles.mutedText}>
+            今週の学習: {weekMinutes}分 / 達成率 {Math.min(100, Math.round((weekMinutes / Math.max(1, weekTarget)) * 100))}%
+          </Text>
+          <View style={styles.inlineRow}>
+            <View style={styles.flex}>
+              <Text style={styles.smallLabel}>今週の目標を変更</Text>
+              <TextInput
+                style={styles.input}
+                placeholder={`${weekTarget}`}
+                keyboardType="numeric"
+                value={weekOverride}
+                onChangeText={setWeekOverride}
+              />
+            </View>
+            <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('week')} disabled={isSavingWeek}>
+              <Text style={styles.primaryButtonText}>{isSavingWeek ? '保存中...' : '更新'}</Text>
+            </Pressable>
           </View>
-          <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('week')} disabled={isSavingWeek}>
-            <Text style={styles.primaryButtonText}>{isSavingWeek ? '保存中...' : '更新'}</Text>
-          </Pressable>
         </View>
-      </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>今月の目標</Text>
-        <ProgressRow label="今月の目標" value={`${monthTarget}分`} />
-        <ProgressBar progress={Math.min(100, Math.round((monthMinutes / Math.max(1, monthTarget)) * 100))} />
-        <Text style={styles.mutedText}>
-          今月の学習: {monthMinutes}分 / 達成率 {Math.min(100, Math.round((monthMinutes / Math.max(1, monthTarget)) * 100))}%
-        </Text>
-        <View style={styles.inlineRow}>
-          <View style={styles.flex}>
-            <Text style={styles.smallLabel}>今月の目標を変更</Text>
-            <TextInput
-              style={styles.input}
-              placeholder={`${monthTarget}`}
-              keyboardType="numeric"
-              value={monthOverride}
-              onChangeText={setMonthOverride}
-            />
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>今月の目標</Text>
+          <ProgressRow label="今月の目標" value={`${monthTarget}分`} />
+          <ProgressBar progress={Math.min(100, Math.round((monthMinutes / Math.max(1, monthTarget)) * 100))} />
+          <Text style={styles.mutedText}>
+            今月の学習: {monthMinutes}分 / 達成率 {Math.min(100, Math.round((monthMinutes / Math.max(1, monthTarget)) * 100))}%
+          </Text>
+          <View style={styles.inlineRow}>
+            <View style={styles.flex}>
+              <Text style={styles.smallLabel}>今月の目標を変更</Text>
+              <TextInput
+                style={styles.input}
+                placeholder={`${monthTarget}`}
+                keyboardType="numeric"
+                value={monthOverride}
+                onChangeText={setMonthOverride}
+              />
+            </View>
+            <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('month')} disabled={isSavingMonth}>
+              <Text style={styles.primaryButtonText}>{isSavingMonth ? '保存中...' : '更新'}</Text>
+            </Pressable>
           </View>
-          <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('month')} disabled={isSavingMonth}>
-            <Text style={styles.primaryButtonText}>{isSavingMonth ? '保存中...' : '更新'}</Text>
-          </Pressable>
         </View>
-      </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>学習記録</Text>
-        <View style={styles.summaryItem}>
-          <Text style={styles.summaryLabel}>累積学習時間</Text>
-          <Text style={styles.summaryValue}>{formatMinutes(totalMinutes)}</Text>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>学習記録</Text>
+          <View style={styles.summaryItem}>
+            <Text style={styles.summaryLabel}>累積学習時間</Text>
+            <Text style={styles.summaryValue}>{formatMinutes(totalMinutes)}</Text>
+          </View>
+          {latestStudyLog && (
+            <View style={[styles.summaryItem, styles.summarySecondary]}>
+              <Text style={styles.summaryLabel}>最後の学習</Text>
+              <Text style={styles.summaryValue}>{getStudyDay(new Date(latestStudyLog.started_at))}</Text>
+            </View>
+          )}
         </View>
-        {latestStudyLog && (
-          <View style={[styles.summaryItem, styles.summarySecondary]}>
-            <Text style={styles.summaryLabel}>最後の学習</Text>
-            <Text style={styles.summaryValue}>{new Date(latestStudyLog.started_at).toLocaleDateString('ja-JP')}</Text>
+
+        {streak.currentStreak > 0 && (
+          <View style={[styles.card, styles.streakCard]}>
+            <View style={styles.streakRow}>
+              <View>
+                <Text style={styles.streakTitle}>{streak.currentStreak}日連続</Text>
+                <Text style={styles.mutedText}>最長記録: {streak.longestStreak}日</Text>
+              </View>
+              <Text style={styles.streakEmoji}>🔥</Text>
+            </View>
           </View>
         )}
-      </View>
-
-      {streak.currentStreak > 0 && (
-        <View style={[styles.card, styles.streakCard]}>
-          <View style={styles.streakRow}>
-            <View>
-              <Text style={styles.streakTitle}>{streak.currentStreak}日連続</Text>
-              <Text style={styles.mutedText}>最長記録: {streak.longestStreak}日</Text>
-            </View>
-            <Text style={styles.streakEmoji}>🔥</Text>
-          </View>
-        </View>
-      )}
       </ScrollView>
     </KeyboardAvoidingView>
   )
 }
 
-const getLocalDateString = (date = new Date()) => {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
 
 function ProgressRow({ label, value }: { label: string; value: string }) {
   return (

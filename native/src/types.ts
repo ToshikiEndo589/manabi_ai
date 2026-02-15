@@ -51,5 +51,6 @@ export type ReviewTask = {
     subject: string | null
     note: string | null
     started_at: string | null
+    reference_book_id?: string | null
   } | null
 }

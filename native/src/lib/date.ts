@@ -1,6 +1,6 @@
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000
-const STUDY_DAY_START_HOUR = 3
-const STUDY_DAY_SHIFT_MS = (24 - STUDY_DAY_START_HOUR) * 60 * 60 * 1000
+const STUDY_DAY_START_HOUR = 0  // Changed from 3 to 0 (midnight)
+const STUDY_DAY_SHIFT_MS = 0  // No shifting needed for midnight cutoff
 
 const formatYmdUTC = (date: Date) => {
   const year = date.getUTCFullYear()

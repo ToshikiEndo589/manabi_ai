@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { MascotMessage } from '@/components/mascot-message'
 import { ReferenceBookManager } from '@/components/reference-book-manager'
-import { saveTimerState, loadTimerState, clearTimerState, type TimerState } from '@/lib/storage/study-timer'
+import { saveTimerState, loadTimerState, clearTimerState } from '@/lib/storage/study-timer'
 import { getStudyDay, getStudyDayDate } from '@/lib/date-utils'
 import type { ReferenceBook } from '@/types/database'
 
@@ -91,12 +91,13 @@ export default function StudyPage() {
         if (error) throw error
         if (tasksError) throw tasksError
         setReferenceBooks(data || [])
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const normalizedTasks = ((tasksData as any[]) || []).map((task) => ({
           ...task,
           study_logs: Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null,
         })) as ReviewTask[]
         setReviewTasks(normalizedTasks)
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Failed to load reference books:', error)
       } finally {
         setIsLoading(false)
@@ -216,7 +217,7 @@ export default function StudyPage() {
 
   const handleStop = async () => {
     setIsRunning(false)
-    
+
     if (seconds === 0) {
       setSeconds(0)
       startTimeRef.current = null
@@ -233,7 +234,7 @@ export default function StudyPage() {
       alert('1分以上の学習時間を記録してください（現在: ' + Math.floor(seconds) + '秒）')
       return
     }
-    
+
     // デバッグ: 保存する分数を確認
     console.log('Saving study log:', { seconds, minutes, selectedBookId })
 
@@ -292,7 +293,7 @@ export default function StudyPage() {
       }
 
       console.log('Saving study log:', { minutes, subject, startedAt, referenceBookId })
-      
+
       const { data, error } = await supabase
         .from('study_logs')
         .insert({
@@ -314,7 +315,7 @@ export default function StudyPage() {
       if (!data) {
         throw new Error('保存に失敗しました: データが返されませんでした')
       }
-      
+
       console.log('Study log saved successfully:', data)
 
       if (note.trim()) {
@@ -343,6 +344,7 @@ export default function StudyPage() {
             .eq('status', 'pending')
             .lte('due_at', new Date().toISOString())
             .order('due_at', { ascending: true })
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const normalizedTasks = ((tasksData as any[]) || []).map((task) => ({
             ...task,
             study_logs: Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null,
@@ -368,9 +370,10 @@ export default function StudyPage() {
       setTimeout(() => {
         setSuccessMessage(null)
       }, 3000)
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Save study log error:', err)
-      alert(err.message || '保存に失敗しました。もう一度お試しください。')
+      const message = err instanceof Error ? err.message : '保存に失敗しました。もう一度お試しください。'
+      alert(message)
     } finally {
       setIsSaving(false)
     }
@@ -765,7 +768,7 @@ export default function StudyPage() {
                           {task.study_logs?.subject || '学習内容'}
                         </div>
                         <div className="text-xs text-muted-foreground">
-                      {formatDueLabel(task.study_logs?.started_at)}
+                          {formatDueLabel(task.study_logs?.started_at)}
                         </div>
                       </div>
                       <div className="flex items-center justify-between gap-2">
@@ -786,74 +789,72 @@ export default function StudyPage() {
                         if (!themeQuiz) return true
                         return !themeQuiz.loading && themeQuiz.questions.length === 0
                       })() && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => handleGenerateQuiz(task, theme)}
-                          >
-                            4択を作成（3問）
-                          </Button>
-                        </div>
-                      )}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => handleGenerateQuiz(task, theme)}
+                            >
+                              4択を作成（3問）
+                            </Button>
+                          </div>
+                        )}
                       {quiz?.themes?.[theme]?.loading && (
                         <div className="text-sm text-muted-foreground">クイズ作成中...</div>
                       )}
                       {quiz?.themes?.[theme] && !quiz.themes[theme].loading && quiz.themes[theme].questions.length > 0 && (
                         <div className="space-y-4">
                           {quiz.themes[theme].questions.map((q, qIndex) => {
-                              const answered = quiz.themes[theme].answers[qIndex] !== undefined
-                              const correctText = q.choices?.[q.correct_index] ?? ''
-                              return (
-                                <div key={`${task.id}-${theme}-${qIndex}`} className="space-y-2">
-                                  <div className="text-sm font-medium">{qIndex + 1}. {q.question}</div>
-                                  <div className="grid gap-2">
-                                    {q.choices.map((choice, cIndex) => {
-                                      const selected = quiz.themes[theme].answers[qIndex] === cIndex
-                                      const isCorrect = q.correct_index === cIndex
-                                      return (
-                                        <button
-                                          key={`${task.id}-${theme}-${qIndex}-${cIndex}`}
-                                          type="button"
-                                          onClick={() => handleAnswer(task.id, theme, qIndex, cIndex)}
-                                          className={`text-left rounded-md border px-3 py-2 text-sm transition ${
-                                            selected
-                                              ? isCorrect
-                                                ? 'border-green-500 bg-green-50 text-green-700'
-                                                : 'border-red-500 bg-red-50 text-red-700'
-                                              : 'border-input hover:bg-muted'
+                            const answered = quiz.themes[theme].answers[qIndex] !== undefined
+                            const correctText = q.choices?.[q.correct_index] ?? ''
+                            return (
+                              <div key={`${task.id}-${theme}-${qIndex}`} className="space-y-2">
+                                <div className="text-sm font-medium">{qIndex + 1}. {q.question}</div>
+                                <div className="grid gap-2">
+                                  {q.choices.map((choice, cIndex) => {
+                                    const selected = quiz.themes[theme].answers[qIndex] === cIndex
+                                    const isCorrect = q.correct_index === cIndex
+                                    return (
+                                      <button
+                                        key={`${task.id}-${theme}-${qIndex}-${cIndex}`}
+                                        type="button"
+                                        onClick={() => handleAnswer(task.id, theme, qIndex, cIndex)}
+                                        className={`text-left rounded-md border px-3 py-2 text-sm transition ${selected
+                                            ? isCorrect
+                                              ? 'border-green-500 bg-green-50 text-green-700'
+                                              : 'border-red-500 bg-red-50 text-red-700'
+                                            : 'border-input hover:bg-muted'
                                           } ${answered ? 'cursor-default' : 'cursor-pointer'}`}
-                                          disabled={answered}
-                                        >
-                                          {choice}
-                                        </button>
-                                      )
-                                    })}
-                                  </div>
-                                  {answered && (
-                                    <>
-                                      <div
-                                        className={`text-sm font-semibold ${
-                                          quiz.themes[theme].answers[qIndex] === q.correct_index
-                                            ? 'text-green-600'
-                                            : 'text-red-600'
-                                        }`}
+                                        disabled={answered}
                                       >
-                                        {quiz.themes[theme].answers[qIndex] === q.correct_index ? '○ 正解' : '× 不正解'}
-                                        <span className="ml-2 text-muted-foreground">
-                                          正解: {q.correct_index + 1}番（{correctText}）
-                                        </span>
-                                      </div>
-                                      {q.explanation && (
-                                        <div className="rounded-md border border-muted bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap">
-                                          解説: {q.explanation}
-                                        </div>
-                                      )}
-                                    </>
-                                  )}
+                                        {choice}
+                                      </button>
+                                    )
+                                  })}
                                 </div>
-                              )
-                            })}
+                                {answered && (
+                                  <>
+                                    <div
+                                      className={`text-sm font-semibold ${quiz.themes[theme].answers[qIndex] === q.correct_index
+                                          ? 'text-green-600'
+                                          : 'text-red-600'
+                                        }`}
+                                    >
+                                      {quiz.themes[theme].answers[qIndex] === q.correct_index ? '○ 正解' : '× 不正解'}
+                                      <span className="ml-2 text-muted-foreground">
+                                        正解: {q.correct_index + 1}番（{correctText}）
+                                      </span>
+                                    </div>
+                                    {q.explanation && (
+                                      <div className="rounded-md border border-muted bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap">
+                                        解説: {q.explanation}
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
                           {(() => {
                             const themeQuiz = quiz.themes[theme]
                             const isThemeComplete =

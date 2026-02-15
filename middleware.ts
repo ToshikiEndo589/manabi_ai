@@ -47,8 +47,8 @@ export async function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname
 
-  // ログイン画面とオンボーディング画面は認証チェックのみ
-  if (pathname === '/login' || pathname === '/onboarding') {
+  // ログイン画面、オンボーディング画面、パスワードリセット、認証コールバックは認証チェックのみ
+  if (pathname === '/login' || pathname === '/onboarding' || pathname === '/reset-password' || pathname.startsWith('/auth')) {
     if (user) {
       // ログイン済みの場合、プロフィールをチェック
       const { data: profile } = await supabase
@@ -74,7 +74,7 @@ export async function middleware(request: NextRequest) {
         return response
       }
     }
-    // 未ログインならそのまま通す
+    // 未ログインまたは /reset-password, /auth ならそのまま通す
     return response
   }
 

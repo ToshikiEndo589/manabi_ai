@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY || 'dummy',
 })
 
 type QuizQuestion = {
@@ -31,41 +31,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'note is required' }, { status: 400 })
     }
 
-    const instructions =
+    const systemPrompt =
       'あなたは受験生向けの復習クイズ作成AIです。' +
       'ユーザーの学習内容から4択問題を作成してください。' +
       `難易度は${difficultyText}に合わせてください。` +
       '必ずJSONのみで出力し、形式は次の通りです。' +
       '{"questions":[{"question":"...","choices":["...","...","...","..."],"correct_index":0,"explanation":"..."}]}' +
-      'choicesは必ず4つ、correct_indexは0-3の整数、explanationは簡潔に。'
+      'choicesは必ず4つ、correct_indexは0-3の整数、explanationは簡潔な解説を含めてください。' +
+      '【重要】同じ学習内容でも、毎回異なる切り口・表現で問題を作成してください（前回と同じ問題にならないように工夫してください）。'
 
-    const completion = await openai.responses.create({
-      model: 'gpt-5',
-      instructions,
-      input: [
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-5-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
         {
           role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: `学習内容:\n${note}\n\n問題数:${questionCount}\n難易度:${difficultyText}`,
-            },
-          ],
+          content: `学習内容:\n${note}\n\n問題数:${questionCount}\n難易度:${difficultyText}`,
         },
       ],
-      max_output_tokens: 700,
-      reasoning: { effort: 'minimal' },
-      text: { verbosity: 'low' },
+      response_format: { type: 'json_object' },
+      temperature: 0.8,
+      max_tokens: 1000,
     })
 
-    const extractedText =
-      completion.output_text?.trim() ||
-      completion.output
-        ?.flatMap((item: any) => item.content || [])
-        .filter((c: any) => c.type === 'output_text')
-        .map((c: any) => c.text)
-        .join('\n')
-        .trim()
+    const extractedText = completion.choices[0]?.message?.content?.trim()
 
     if (!extractedText) {
       return NextResponse.json({ error: 'empty response' }, { status: 500 })
@@ -80,12 +69,32 @@ export async function POST(req: NextRequest) {
 
     const questions = (parsed.questions || [])
       .filter((q) => q && Array.isArray(q.choices) && q.choices.length === 4)
-      .map((q) => ({
-        question: String(q.question || '').trim(),
-        choices: q.choices.map((c: any) => String(c)),
-        correct_index: Number(q.correct_index ?? 0),
-        explanation: String(q.explanation || '').trim() || undefined,
-      }))
+      .map((q) => {
+        const originalChoices = q.choices.map((c: unknown) => String(c))
+        const correctIndex = Number(q.correct_index ?? 0)
+
+        // Create an array of indices [0, 1, 2, 3] and shuffle them
+        const indices = Array.from({ length: originalChoices.length }, (_, i) => i)
+        for (let i = indices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [indices[i], indices[j]] = [indices[j], indices[i]]
+        }
+
+        // Reorder choices based on shuffled indices
+        const shuffledChoices = indices.map((i) => originalChoices[i])
+
+        // Find where the original correct answer moved to
+        // indices[newIndex] = oldIndex
+        // We want newIndex where indices[newIndex] == correctIndex
+        const newCorrectIndex = indices.indexOf(correctIndex)
+
+        return {
+          question: String(q.question || '').trim(),
+          choices: shuffledChoices,
+          correct_index: newCorrectIndex,
+          explanation: String(q.explanation || '').trim() || undefined,
+        }
+      })
       .filter((q) => q.question && q.correct_index >= 0 && q.correct_index < 4)
 
     return NextResponse.json({ questions })

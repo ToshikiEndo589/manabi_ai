@@ -9,8 +9,12 @@ import { getMaterialColor } from '@/lib/color-utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Plus, Share2 } from 'lucide-react'
+import { Plus, Share2, CalendarIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Calendar } from '@/components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { format } from 'date-fns'
+import { ja } from 'date-fns/locale'
 import type { StudyLog, ReferenceBook, Profile } from '@/types/database'
 
 const CategoryStackedChart = dynamic(
@@ -51,7 +55,7 @@ export function LogPageClient() {
   const [showManualInput, setShowManualInput] = useState(false)
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null)
   const [manualMinutes, setManualMinutes] = useState('')
-  const [manualDate, setManualDate] = useState(getLocalDateString())
+  const [manualDate, setManualDate] = useState<Date | undefined>(new Date())
   const [manualNotes, setManualNotes] = useState<string[]>([''])
   const [attachNoteToExisting, setAttachNoteToExisting] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -65,7 +69,7 @@ export function LogPageClient() {
   const [editBookId, setEditBookId] = useState<string | null>(null)
   const [editSubject, setEditSubject] = useState('')
   const [editMinutes, setEditMinutes] = useState('')
-  const [editDate, setEditDate] = useState(getLocalDateString())
+  const [editDate, setEditDate] = useState<Date | undefined>(new Date())
   const [editNote, setEditNote] = useState('')
   const [showEditLogs, setShowEditLogs] = useState(false)
   const [showMemoLogs, setShowMemoLogs] = useState(false)
@@ -122,13 +126,13 @@ export function LogPageClient() {
 
     // 定期的にデータを更新（3秒ごと）
     const interval = setInterval(loadData, 3000)
-    
+
     // カスタムイベントでデータ更新を通知
     const handleStudyLogSaved = () => {
       loadData()
     }
     window.addEventListener('studyLogSaved', handleStudyLogSaved)
-    
+
     return () => {
       clearInterval(interval)
       window.removeEventListener('studyLogSaved', handleStudyLogSaved)
@@ -282,7 +286,7 @@ export function LogPageClient() {
 
   const handleToggleManualInput = () => {
     if (!showManualInput) {
-      setManualDate(getLocalDateString())
+      setManualDate(new Date())
     }
     setShowManualInput(!showManualInput)
   }
@@ -294,23 +298,9 @@ export function LogPageClient() {
     setShowEditLogs(!showEditLogs)
   }
 
-  const toLocalDateInput = (dateStr: string) => {
-    const date = new Date(dateStr)
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
-  }
 
-  const startEditLog = (log: StudyLog) => {
-    setEditingLogId(log.id)
-    setEditingGroupIds([log.id])
-    setEditBookId(log.reference_book_id || null)
-    setEditSubject(log.subject)
-    setEditMinutes(String(log.study_minutes))
-    setEditDate(toLocalDateInput(log.started_at))
-    setEditNote(log.note || '')
-  }
+
+
 
   const startEditGroup = (group: {
     ids: string[]
@@ -327,7 +317,7 @@ export function LogPageClient() {
     setEditBookId(group.reference_book_id || null)
     setEditSubject(group.subject)
     setEditMinutes(String(group.study_minutes))
-    setEditDate(group.studyDay)
+    setEditDate(new Date(group.started_at))
     setEditNote(group.note || '')
   }
 
@@ -336,7 +326,7 @@ export function LogPageClient() {
     setEditBookId(null)
     setEditSubject('')
     setEditMinutes('')
-    setEditDate(getLocalDateString())
+    setEditDate(new Date())
     setEditNote('')
     setEditingGroupIds([])
   }
@@ -391,6 +381,10 @@ export function LogPageClient() {
       alert('1分以上の学習時間を入力してください')
       return
     }
+    if (!editDate) {
+      alert('日付を入力してください')
+      return
+    }
     const inputDate = new Date(editDate)
     inputDate.setHours(12, 0, 0, 0)
     const startedAt = inputDate.toISOString()
@@ -410,7 +404,7 @@ export function LogPageClient() {
 
       const noteValue = editNote.trim() || null
 
-      const { data: updated, error } = await supabase
+      const { error } = await supabase
         .from('study_logs')
         .update({
           subject,
@@ -450,36 +444,14 @@ export function LogPageClient() {
       }
 
       cancelEditLog()
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Update study log error:', err)
-      alert(err.message || '更新に失敗しました。もう一度お試しください。')
+      const message = err instanceof Error ? err.message : '更新に失敗しました。もう一度お試しください。'
+      alert(message)
     }
   }
 
-  const deleteLog = async (logId: string) => {
-    if (!confirm('この学習記録を削除しますか？')) return
-    try {
-      const supabase = createClient()
-      const { error } = await supabase
-        .from('study_logs')
-        .delete()
-        .eq('id', logId)
 
-      if (error) throw error
-
-      const { data: logsData } = await supabase
-        .from('study_logs')
-        .select('*')
-        .order('started_at', { ascending: false })
-
-      if (logsData) {
-        applyLogs(logsData)
-      }
-    } catch (err: any) {
-      console.error('Delete study log error:', err)
-      alert(err.message || '削除に失敗しました。もう一度お試しください。')
-    }
-  }
 
   const deleteLogGroup = async (logIds: string[]) => {
     if (!confirm('この学習記録を削除しますか？')) return
@@ -500,9 +472,10 @@ export function LogPageClient() {
       if (logsData) {
         applyLogs(logsData)
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '削除に失敗しました。もう一度お試しください。'
       console.error('Delete study log error:', err)
-      alert(err.message || '削除に失敗しました。もう一度お試しください。')
+      alert(message)
     }
   }
 
@@ -670,6 +643,10 @@ export function LogPageClient() {
       }
 
       if (attachNoteToExisting) {
+        if (!manualDate) {
+          alert('日付を入力してください')
+          return
+        }
         const dateStart = new Date(manualDate)
         dateStart.setHours(3, 0, 0, 0)
         const dateEnd = new Date(dateStart)
@@ -716,51 +693,55 @@ export function LogPageClient() {
           return
         }
 
-      const selectedBook = referenceBooks.find((b) => b.id === selectedBookId)
-      const subject = selectedBook?.name?.trim() || 'その他'
+        const selectedBook = referenceBooks.find((b) => b.id === selectedBookId)
 
-      if (!subject || subject.length === 0) {
-        throw new Error('科目名が設定されていません')
-      }
+        if (!selectedBook) {
+          throw new Error('教材を選択してください')
+        }
 
-      // 手動入力の日付を12:00:00として保存（03:00-03:00の区切りで正しい日付として判定されるように）
-      const inputDate = new Date(manualDate)
-      inputDate.setHours(12, 0, 0, 0)
-      const startedAt = inputDate.toISOString()
+        const subject = selectedBook.name
+
+        // 手動入力の日付を12:00:00として保存（03:00-03:00の区切りで正しい日付として判定されるように）
+        if (!manualDate) {
+          throw new Error('日付を選択してください')
+        }
+        const inputDate = new Date(manualDate)
+        inputDate.setHours(12, 0, 0, 0)
+        const startedAt = inputDate.toISOString()
 
         const noteValue = getManualNoteValue() || null
         const { data, error } = await supabase
-        .from('study_logs')
-        .insert({
-          user_id: user.id,
-          subject: subject,
-          reference_book_id: selectedBookId || null,
-          study_minutes: minutes,
-          started_at: startedAt,
-          note: noteValue,
-        })
-        .select()
-        .single()
+          .from('study_logs')
+          .insert({
+            user_id: user.id,
+            subject: subject,
+            reference_book_id: selectedBookId || null,
+            study_minutes: minutes,
+            started_at: startedAt,
+            note: noteValue,
+          })
+          .select()
+          .single()
 
-      if (error) {
-        console.error('Study log save error:', error)
-        throw new Error(`保存に失敗しました: ${error.message}`)
-      }
+        if (error) {
+          console.error('Study log save error:', error)
+          throw new Error(`保存に失敗しました: ${error.message}`)
+        }
 
-      if (!data) {
-        throw new Error('保存に失敗しました: データが返されませんでした')
-      }
+        if (!data) {
+          throw new Error('保存に失敗しました: データが返されませんでした')
+        }
 
-      // データを再取得
-      const { data: logsData } = await supabase
-        .from('study_logs')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('started_at', { ascending: false })
+        // データを再取得
+        const { data: logsData } = await supabase
+          .from('study_logs')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('started_at', { ascending: false })
 
-      if (logsData) {
-        applyLogs(logsData)
-      }
+        if (logsData) {
+          applyLogs(logsData)
+        }
 
         if (noteValue) {
           await ensureReviewTasks(supabase, user.id, data.id, startedAt, noteValue)
@@ -769,14 +750,15 @@ export function LogPageClient() {
 
       // フォームをリセット
       setManualMinutes('')
-      setManualDate(getLocalDateString())
+      setManualDate(new Date())
       setManualNotes([''])
       setAttachNoteToExisting(false)
       setShowManualInput(false)
       alert(attachNoteToExisting ? 'メモを追加しました！' : '学習記録を保存しました！')
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Save study log error:', err)
-      alert(err.message || '保存に失敗しました。もう一度お試しください。')
+      const message = err instanceof Error ? err.message : '保存に失敗しました。もう一度お試しください。'
+      alert(message)
     } finally {
       setIsSaving(false)
     }
@@ -1055,14 +1037,34 @@ export function LogPageClient() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="manual_date">学習日</Label>
-                  <Input
-                    id="manual_date"
-                    type="date"
-                    value={manualDate}
-                    onChange={(e) => setManualDate(e.target.value)}
-                    required
-                  />
+                  <Label>学習日</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant={'outline'}
+                        className={cn(
+                          'w-full justify-start text-left font-normal',
+                          !manualDate && 'text-muted-foreground'
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {manualDate ? (
+                          format(manualDate, 'PPP', { locale: ja })
+                        ) : (
+                          <span>日付を選択</span>
+                        )}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0">
+                      <Calendar
+                        mode="single"
+                        selected={manualDate}
+                        onSelect={setManualDate}
+                        initialFocus
+                        locale={ja}
+                      />
+                    </PopoverContent>
+                  </Popover>
                 </div>
 
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1239,11 +1241,33 @@ export function LogPageClient() {
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                         <div className="space-y-1">
                           <Label>学習日</Label>
-                          <Input
-                            type="date"
-                            value={editDate}
-                            onChange={(e) => setEditDate(e.target.value)}
-                          />
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant={'outline'}
+                                className={cn(
+                                  'w-full justify-start text-left font-normal',
+                                  !editDate && 'text-muted-foreground'
+                                )}
+                              >
+                                <CalendarIcon className="mr-2 h-4 w-4" />
+                                {editDate ? (
+                                  format(editDate, 'PPP', { locale: ja })
+                                ) : (
+                                  <span>日付を選択</span>
+                                )}
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0">
+                              <Calendar
+                                mode="single"
+                                selected={editDate}
+                                onSelect={setEditDate}
+                                initialFocus
+                                locale={ja}
+                              />
+                            </PopoverContent>
+                          </Popover>
                         </div>
                         <div className="flex items-end gap-2">
                           <Button onClick={saveEditLog} disabled={isSaving}>
@@ -1349,8 +1373,8 @@ export function LogPageClient() {
                                   day.progress >= 100
                                     ? 'bg-green-500'
                                     : day.progress >= 50
-                                    ? 'bg-blue-500'
-                                    : 'bg-orange-500'
+                                      ? 'bg-blue-500'
+                                      : 'bg-orange-500'
                                 )}
                                 style={{ width: `${Math.min(100, day.progress)}%` }}
                               />
@@ -1392,8 +1416,8 @@ export function LogPageClient() {
                                   week.progress >= 100
                                     ? 'bg-green-500'
                                     : week.progress >= 50
-                                    ? 'bg-blue-500'
-                                    : 'bg-orange-500'
+                                      ? 'bg-blue-500'
+                                      : 'bg-orange-500'
                                 )}
                                 style={{ width: `${Math.min(100, week.progress)}%` }}
                               />
@@ -1430,8 +1454,8 @@ export function LogPageClient() {
                                   month.progress >= 100
                                     ? 'bg-green-500'
                                     : month.progress >= 50
-                                    ? 'bg-blue-500'
-                                    : 'bg-orange-500'
+                                      ? 'bg-blue-500'
+                                      : 'bg-orange-500'
                                 )}
                                 style={{ width: `${Math.min(100, month.progress)}%` }}
                               />

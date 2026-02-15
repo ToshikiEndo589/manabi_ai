@@ -3,14 +3,14 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { Ionicons } from '@expo/vector-icons'
 import { HomeScreen } from '../screens/HomeScreen'
 import { StudyScreen } from '../screens/StudyScreen'
-import { QAScreen } from '../screens/QAScreen'
+import { ReviewScreen } from '../screens/ReviewScreen'
 import { LogScreen } from '../screens/LogScreen'
 import { SettingsScreen } from '../screens/SettingsScreen'
 
 export type AppTabParamList = {
   Home: undefined
   Study: undefined
-  QA: undefined
+  Review: undefined
   Log: undefined
   Settings: undefined
 }
@@ -33,7 +33,7 @@ export function AppTabs() {
           const map: Record<string, keyof typeof Ionicons.glyphMap> = {
             Home: 'home-outline',
             Study: 'book-outline',
-            QA: 'chatbubble-outline',
+            Review: 'refresh-outline',
             Log: 'bar-chart-outline',
             Settings: 'settings-outline',
           }
@@ -45,7 +45,7 @@ export function AppTabs() {
     >
       <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'ホーム' }} />
       <Tab.Screen name="Study" component={StudyScreen} options={{ title: '学習' }} />
-      <Tab.Screen name="QA" component={QAScreen} options={{ title: 'Q&A' }} />
+      <Tab.Screen name="Review" component={ReviewScreen} options={{ title: '復習' }} />
       <Tab.Screen name="Log" component={LogScreen} options={{ title: '記録' }} />
       <Tab.Screen name="Settings" component={SettingsScreen} options={{ title: '設定' }} />
     </Tab.Navigator>

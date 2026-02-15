@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "まなびリズム",
+    "name": "まなびAI",
     "slug": "manabi-rhythm",
     "scheme": "manabi-rhythm",
     "version": "1.0.0",
@@ -21,7 +21,10 @@
       }
     },
     "android": {
-      "permissions": ["CAMERA", "READ_MEDIA_IMAGES"],
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "../public/images/mascot.png",
         "backgroundColor": "#ffffff"
@@ -29,6 +32,9 @@
     },
     "web": {
       "favicon": "../public/images/mascot.png"
-    }
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker"
+    ]
   }
 }

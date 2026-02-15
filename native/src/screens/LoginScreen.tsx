@@ -11,9 +11,11 @@ import {
   TextInput,
   View,
 } from 'react-native'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 
 export function LoginScreen() {
+  const navigation = useNavigation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
@@ -87,6 +89,15 @@ export function LoginScreen() {
               {loading ? '処理中...' : mode === 'signin' ? 'ログイン' : '新規登録'}
             </Text>
           </Pressable>
+          {mode === 'signin' && (
+            <Pressable
+              style={styles.forgotButton}
+              onPress={() => (navigation as any).navigate('ForgotPassword')}
+              disabled={loading}
+            >
+              <Text style={styles.forgotText}>パスワードをお忘れですか？</Text>
+            </Pressable>
+          )}
           <Pressable
             style={styles.linkButton}
             onPress={() => {
@@ -176,6 +187,14 @@ const styles = StyleSheet.create({
   linkText: {
     color: '#2563eb',
     fontSize: 14,
+  },
+  forgotButton: {
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  forgotText: {
+    color: '#64748b',
+    fontSize: 13,
   },
   errorText: {
     backgroundColor: '#fee2e2',
