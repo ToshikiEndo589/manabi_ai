@@ -37,7 +37,13 @@ export function LoginScreen() {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
       } else {
-        const { error } = await supabase.auth.signUp({ email, password })
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: 'https://manabi-ai.vercel.app/auth/callback'
+          }
+        })
         if (error) throw error
         Alert.alert('確認メール送信', 'メールを確認してサインインしてください。')
       }

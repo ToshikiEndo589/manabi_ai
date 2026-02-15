@@ -34,9 +34,7 @@ export function ForgotPasswordScreen() {
         setError(null)
         try {
             const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                // 本番環境用: 'https://ai-yobikou.vercel.app/reset-password'
-                // ローカルテスト用:
-                redirectTo: 'http://localhost:3000/reset-password',
+                redirectTo: 'https://manabi-ai.vercel.app/reset-password',
             })
             if (error) throw error
             setSuccess(true)
