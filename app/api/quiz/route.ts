@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
       ],
       response_format: { type: 'json_object' },
       temperature: 0.8,
-      max_tokens: 1000,
+
     })
 
     const extractedText = completion.choices[0]?.message?.content?.trim()
@@ -100,6 +100,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ questions })
   } catch (error) {
     console.error('Quiz API error:', error)
-    return NextResponse.json({ error: 'server error' }, { status: 500 })
+    // エラーの詳細をログに出力
+    if (error instanceof Error) {
+      console.error('Error name:', error.name)
+      console.error('Error message:', error.message)
+      console.error('Error stack:', error.stack)
+    }
+    // OpenAI APIのエラーの場合、詳細情報を取得
+    if (typeof error === 'object' && error !== null) {
+      console.error('Error details:', JSON.stringify(error, null, 2))
+    }
+
+    const errorMessage = error instanceof Error ? error.message : 'server error'
+    return NextResponse.json(
+      { error: 'server error', details: errorMessage },
+      { status: 500 }
+    )
   }
 }
