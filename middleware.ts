@@ -7,7 +7,8 @@ export async function middleware(request: NextRequest) {
   if (
     pathname === '/blocked' ||
     pathname === '/reset-password' ||
-    pathname.startsWith('/auth/')
+    pathname.startsWith('/auth/') ||
+    pathname.startsWith('/api/')
   ) {
     return NextResponse.next()
   }
