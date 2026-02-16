@@ -3,9 +3,12 @@ import { NextResponse, type NextRequest } from 'next/server'
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
-  // Allow only the blocked page and static resources
-  // Block everything else to prevent web app access
-  if (pathname === '/blocked') {
+  // Allow the blocked page and auth-related pages for Expo Go development
+  if (
+    pathname === '/blocked' ||
+    pathname === '/reset-password' ||
+    pathname.startsWith('/auth/')
+  ) {
     return NextResponse.next()
   }
 
