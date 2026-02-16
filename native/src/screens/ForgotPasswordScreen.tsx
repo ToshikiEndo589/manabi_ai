@@ -33,13 +33,33 @@ export function ForgotPasswordScreen() {
         setLoading(true)
         setError(null)
         try {
-            const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                redirectTo: 'https://manabi-ai.vercel.app/reset-password',
+            // Development (Expo Go): use web URL
+            // Production (built app): use deep link
+            const redirectUrl = __DEV__
+                ? 'https://manabi-ai.vercel.app/reset-password'
+                : 'manabi-rhythm://reset-password'
+
+            const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+                redirectTo: redirectUrl,
             })
-            if (error) throw error
+            if (error) {
+                // Log detailed error information for debugging (using warn to avoid blocking LogBox)
+                console.warn('Password reset error:', {
+                    message: error.message,
+                    status: error.status,
+                    code: error.code,
+                    name: error.name,
+                    fullError: error,
+                })
+                throw error
+            }
             setSuccess(true)
         } catch (error: any) {
-            setError(error?.message ?? 'リセットメールの送信に失敗しました。')
+            // Show detailed error information
+            const errorMessage = error?.message ?? 'リセットメールの送信に失敗しました。'
+            const errorCode = error?.code ? `[${error.code}]` : ''
+            const errorStatus = error?.status ? `(Status: ${error.status})` : ''
+            setError(`${errorMessage} ${errorCode} ${errorStatus}`.trim())
         } finally {
             setLoading(false)
         }

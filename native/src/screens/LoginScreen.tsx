@@ -37,11 +37,17 @@ export function LoginScreen() {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
       } else {
+        // Development (Expo Go): use web URL
+        // Production (built app): use deep link
+        const redirectUrl = __DEV__
+          ? 'https://manabi-ai.vercel.app/auth/callback'
+          : 'manabi-rhythm://auth/callback'
+
         const { error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            emailRedirectTo: 'https://manabi-ai.vercel.app/auth/callback'
+            emailRedirectTo: redirectUrl
           }
         })
         if (error) throw error

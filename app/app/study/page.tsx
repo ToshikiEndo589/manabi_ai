@@ -407,9 +407,16 @@ export default function StudyPage() {
   }
 
   const handleGenerateQuiz = async (task: ReviewTask, theme?: string) => {
+    console.log('handleGenerateQuiz called with:', { task, theme })
     const note = task.study_logs?.note?.trim()
-    if (!note) return
+    console.log('Note value:', note)
+    if (!note) {
+      alert('学習内容（メモ）が記録されていないため、クイズを生成できません。')
+      console.error('Note is empty for task:', task)
+      return
+    }
     const themeValue = theme || note
+    console.log('Theme value:', themeValue)
     setQuizByTask((prev) => {
       const current = prev[task.id]?.themes || {}
       const existing = current[themeValue]
@@ -437,7 +444,18 @@ export default function StudyPage() {
             body: JSON.stringify({ note: themeItem, count: 3 }),
           })
           if (!response.ok) {
-            throw new Error('クイズの生成に失敗しました')
+            // APIからのエラーレスポンスを取得
+            let errorDetails = 'クイズの生成に失敗しました'
+            try {
+              const errorData = await response.json()
+              if (errorData.details) {
+                errorDetails = `${errorDetails}: ${errorData.details}`
+              }
+              console.error('API error response:', errorData)
+            } catch {
+              // JSON解析失敗時は無視
+            }
+            throw new Error(errorDetails)
           }
           const data = await response.json()
           const questions = (data.questions || []).map((q: QuizQuestion) => ({
@@ -472,7 +490,8 @@ export default function StudyPage() {
         delete next[task.id]
         return next
       })
-      alert('クイズの生成に失敗しました。もう一度お試しください。')
+      const errorMessage = error instanceof Error ? error.message : 'クイズの生成に失敗しました。もう一度お試しください。'
+      alert(errorMessage)
     }
   }
 
@@ -820,10 +839,10 @@ export default function StudyPage() {
                                         type="button"
                                         onClick={() => handleAnswer(task.id, theme, qIndex, cIndex)}
                                         className={`text-left rounded-md border px-3 py-2 text-sm transition ${selected
-                                            ? isCorrect
-                                              ? 'border-green-500 bg-green-50 text-green-700'
-                                              : 'border-red-500 bg-red-50 text-red-700'
-                                            : 'border-input hover:bg-muted'
+                                          ? isCorrect
+                                            ? 'border-green-500 bg-green-50 text-green-700'
+                                            : 'border-red-500 bg-red-50 text-red-700'
+                                          : 'border-input hover:bg-muted'
                                           } ${answered ? 'cursor-default' : 'cursor-pointer'}`}
                                         disabled={answered}
                                       >
@@ -836,8 +855,8 @@ export default function StudyPage() {
                                   <>
                                     <div
                                       className={`text-sm font-semibold ${quiz.themes[theme].answers[qIndex] === q.correct_index
-                                          ? 'text-green-600'
-                                          : 'text-red-600'
+                                        ? 'text-green-600'
+                                        : 'text-red-600'
                                         }`}
                                     >
                                       {quiz.themes[theme].answers[qIndex] === q.correct_index ? '○ 正解' : '× 不正解'}

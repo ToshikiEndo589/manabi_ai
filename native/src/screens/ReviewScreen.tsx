@@ -454,9 +454,15 @@ export function ReviewScreen() {
     }
 
     const handleGenerateQuiz = async (task: ReviewTask, theme?: string) => {
-        if (!endpoint) return
+        if (!endpoint) {
+            Alert.alert('設定エラー', 'APIエンドポイントが設定されていません。アプリを再起動してみてください。')
+            return
+        }
         const noteValue = task.study_logs?.note?.trim()
-        if (!noteValue) return
+        if (!noteValue) {
+            Alert.alert('データエラー', '学習内容（メモ）が記録されていないため、クイズを生成できません。')
+            return
+        }
         const themeValue = theme || noteValue
         const difficultyKey = getThemeKey(task.id, themeValue)
         const difficulty = difficultyByTheme[difficultyKey] || DEFAULT_DIFFICULTY
@@ -483,7 +489,11 @@ export function ReviewScreen() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ note: themeValue, count: 1, difficulty }),
             })
-            if (!response.ok) throw new Error('クイズの生成に失敗しました')
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}))
+                const errorMessage = errorData.details || errorData.error || 'クイズの生成に失敗しました'
+                throw new Error(errorMessage)
+            }
             const data = await response.json()
             const questions = (data.questions || []).map((q: QuizQuestion) => {
                 const originalChoices = q.choices ? q.choices.map((c: any) => String(c)) : []
@@ -526,13 +536,15 @@ export function ReviewScreen() {
                     },
                 }
             })
-        } catch (_error) {
+        } catch (error) {
+            console.error('Quiz generation error:', error)
             setQuizByTask((prev) => {
                 const next = { ...prev }
                 delete next[task.id]
                 return next
             })
-            Alert.alert('エラー', 'クイズの生成に失敗しました。')
+            const message = error instanceof Error ? error.message : 'クイズの生成に失敗しました。'
+            Alert.alert('生成エラー', message)
         }
     }
 
