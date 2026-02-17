@@ -18,6 +18,7 @@ export function LoginScreen() {
   const navigation = useNavigation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -28,6 +29,13 @@ export function LoginScreen() {
     if (!email || !password) {
       setError('メールアドレスとパスワードを入力してください。')
       return
+    }
+
+    if (mode === 'signup') {
+      if (password !== confirmPassword) {
+        setError('パスワードが一致しません。')
+        return
+      }
     }
 
     setLoading(true)
@@ -96,6 +104,18 @@ export function LoginScreen() {
             value={password}
             onChangeText={setPassword}
           />
+          {mode === 'signup' && (
+            <>
+              <Text style={styles.label}>パスワード（確認）</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="••••••••"
+                secureTextEntry
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+              />
+            </>
+          )}
           <Pressable style={styles.primaryButton} onPress={handleSubmit} disabled={loading}>
             <Text style={styles.primaryButtonText}>
               {loading ? '処理中...' : mode === 'signin' ? 'ログイン' : '新規登録'}

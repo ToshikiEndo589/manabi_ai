@@ -1,14 +1,14 @@
 import React from 'react'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { Ionicons } from '@expo/vector-icons'
-import { HomeScreen } from '../screens/HomeScreen'
+
 import { StudyScreen } from '../screens/StudyScreen'
 import { ReviewScreen } from '../screens/ReviewScreen'
 import { LogScreen } from '../screens/LogScreen'
 import { SettingsScreen } from '../screens/SettingsScreen'
 
 export type AppTabParamList = {
-  Home: undefined
+
   Study: undefined
   Review: undefined
   Log: undefined
@@ -31,7 +31,7 @@ export function AppTabs() {
         },
         tabBarIcon: ({ color, size }) => {
           const map: Record<string, keyof typeof Ionicons.glyphMap> = {
-            Home: 'home-outline',
+
             Study: 'book-outline',
             Review: 'refresh-outline',
             Log: 'bar-chart-outline',
@@ -43,7 +43,7 @@ export function AppTabs() {
         headerTitleAlign: 'center',
       })}
     >
-      <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'ホーム' }} />
+
       <Tab.Screen name="Study" component={StudyScreen} options={{ title: '学習' }} />
       <Tab.Screen name="Review" component={ReviewScreen} options={{ title: '復習' }} />
       <Tab.Screen name="Log" component={LogScreen} options={{ title: '記録' }} />

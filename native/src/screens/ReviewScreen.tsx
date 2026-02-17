@@ -709,6 +709,19 @@ export function ReviewScreen() {
             themeCount: number
         }> = {}
 
+        // 1. Initialize with all reference books
+        referenceBooks.forEach((book) => {
+            const key = `book:${book.id}`
+            groups[key] = {
+                key,
+                title: book.name,
+                imageUrl: book.image_url,
+                tasks: [],
+                themeCount: 0,
+            }
+        })
+
+        // 2. Distribute tasks
         reviewTasks.forEach((task) => {
             const bookId = task.study_logs?.reference_book_id
             const subject = task.study_logs?.subject || 'その他'
@@ -765,9 +778,6 @@ export function ReviewScreen() {
     }, [groupedTasks])
 
     const currentTasks = useMemo(() => {
-        if (groupedTasks.length === 1) {
-            return groupedTasks[0].tasks;
-        }
         if (!selectedSubjectKey) return []
         const group = groupedTasks.find(g => g.key === selectedSubjectKey)
         return group ? group.tasks : []
@@ -781,12 +791,12 @@ export function ReviewScreen() {
                     <View>
                         <Text style={styles.cardTitle}>復習カード</Text>
                         <Text style={styles.cardSubtitle}>
-                            {(selectedSubjectKey || groupedTasks.length === 1)
+                            {(selectedSubjectKey)
                                 ? (selectedSubjectKey ? groupedTasks.find(g => g.key === selectedSubjectKey)?.title : groupedTasks[0]?.title)
                                 : '忘却曲線に合わせて今日の復習を出題します'}
                         </Text>
                     </View>
-                    {(selectedSubjectKey && groupedTasks.length > 1) ? (
+                    {(selectedSubjectKey) ? (
                         <Pressable style={styles.backButton} onPress={() => setSelectedSubjectKey(null)}>
                             <Text style={styles.backButtonText}>戻る</Text>
                         </Pressable>
@@ -797,10 +807,10 @@ export function ReviewScreen() {
                         </Pressable>
                     )}
                 </View>
-                {(loading || (reviewTasks.length === 0 && !loading)) ? (
+                {(loading || (groupedTasks.length === 0 && !loading)) ? (
                     <>
                         {loading && <Text style={styles.mutedText}>読み込み中...</Text>}
-                        {!loading && reviewTasks.length === 0 && (
+                        {!loading && groupedTasks.length === 0 && (
                             <View style={styles.emptyState}>
                                 <View style={styles.emptyIconContainer}>
                                     <Ionicons name="checkmark-done-circle" size={64} color="#3b82f6" />
@@ -822,7 +832,7 @@ export function ReviewScreen() {
                     </>
                 ) : (
                     <>
-                        {!selectedSubjectKey && groupedTasks.length > 1 ? (
+                        {!selectedSubjectKey ? (
                             <View style={styles.subjectList}>
                                 {groupedTasks.map((group) => (
                                     <Pressable
@@ -1016,13 +1026,19 @@ export function ReviewScreen() {
                                     const visible = themes.filter((theme) => !(skippedThemes[t.id] || []).includes(theme))
                                     return visible.length === 0
                                 }) && (
-                                        <View style={[styles.emptyState, { marginTop: 20, backgroundColor: 'transparent' }]}>
-                                            <Text style={[styles.emptySubtitle, { color: '#64748b' }]}>この教材の復習はすべて完了しました！</Text>
-                                            {groupedTasks.length > 1 && (
-                                                <Pressable style={styles.backButton} onPress={() => setSelectedSubjectKey(null)}>
-                                                    <Text style={styles.backButtonText}>一覧に戻る</Text>
-                                                </Pressable>
-                                            )}
+                                        <View style={[styles.emptyState, { marginTop: 40, backgroundColor: 'transparent' }]}>
+                                            <View style={styles.emptyIconContainer}>
+                                                <Ionicons name="trophy" size={56} color="#fbbf24" />
+                                            </View>
+                                            <Text style={styles.emptyTitle}>復習コンプリート！</Text>
+                                            <Text style={[styles.emptySubtitle, { color: '#64748b', marginBottom: 30 }]}>
+                                                この教材の復習はすべて完了しました！{'\n'}
+                                                素晴らしい進捗です。
+                                            </Text>
+                                            <Pressable style={styles.emptyActionButton} onPress={() => setSelectedSubjectKey(null)}>
+                                                <Ionicons name="list" size={20} color="#ffffff" />
+                                                <Text style={styles.emptyActionText}>一覧に戻る</Text>
+                                            </Pressable>
                                         </View>
                                     )}
                             </View>
