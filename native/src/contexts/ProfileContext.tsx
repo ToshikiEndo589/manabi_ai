@@ -52,10 +52,16 @@ export function ProfileProvider({ session, children }: { session: Session; child
         .from('profiles')
         .insert({
           user_id: session.user.id,
-          school_name: data.school_name,
-          current_deviation: data.current_deviation,
-          target_deviation: data.target_deviation,
+          username: data.username,
+          birth_date: data.birth_date,
+          gender: data.gender,
+          study_purpose: data.study_purpose,
+          school_name: data.school_name ?? '',
+          current_deviation: data.current_deviation ?? 0,
+          target_deviation: data.target_deviation ?? 0,
           exam_date: data.exam_date ?? null,
+          weekday_target_minutes: data.weekday_target_minutes,
+          weekend_target_minutes: data.weekend_target_minutes,
           onboarding_completed: true,
         })
         .select()

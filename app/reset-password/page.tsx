@@ -68,9 +68,6 @@ export default function ResetPasswordPage() {
             if (error) throw error
 
             setSuccess(true)
-            setTimeout(() => {
-                router.push('/login')
-            }, 2000)
         } catch (error: any) {
             setError(error?.message ?? 'パスワードの更新に失敗しました。')
         } finally {
@@ -89,10 +86,10 @@ export default function ResetPasswordPage() {
                             </svg>
                         </div>
                         <h2 className="text-2xl font-bold text-gray-900 mb-2">パスワードを更新しました</h2>
-                        <p className="text-gray-600 mb-4">
-                            新しいパスワードでログインできます。
+                        <p className="text-gray-600 mb-6">
+                            新しいパスワードの設定が完了しました。<br />
+                            アプリに戻ってログインしてください。
                         </p>
-                        <p className="text-sm text-gray-500">ログイン画面にリダイレクトしています...</p>
                     </div>
                 </div>
             </div>

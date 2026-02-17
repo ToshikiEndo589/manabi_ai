@@ -1,9 +1,13 @@
 export type Profile = {
   id?: string
   user_id: string
-  school_name: string
-  current_deviation: number
-  target_deviation: number
+  username: string
+  school_name?: string
+  current_deviation?: number
+  target_deviation?: number
+  birth_date: string
+  gender: string
+  study_purpose: string[]
   exam_date: string | null
   weekday_target_minutes?: number | null
   weekend_target_minutes?: number | null
