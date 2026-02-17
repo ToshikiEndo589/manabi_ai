@@ -15,8 +15,8 @@ import DateTimePicker from '@react-native-community/datetimepicker'
 import { useProfile } from '../contexts/ProfileContext'
 import { supabase } from '../lib/supabase'
 
-const PURPOSES = ['大学受験', '資格取得', '学校の補習', 'その他']
-const GENDERS = ['男性', '女性', 'その他', '回答しない']
+const PURPOSES = ['大学受験', '資格取得', 'その他']
+const GENDERS = ['男性', '女性']
 
 export function SettingsScreen() {
   const { profile, updateProfile } = useProfile()

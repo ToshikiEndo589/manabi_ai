@@ -18,8 +18,8 @@ import { useProfile } from '../contexts/ProfileContext'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 const STEPS = ['基本情報', '利用目的', '学習目標']
-const PURPOSES = ['大学受験', '資格取得', '学校の補習', 'その他']
-const GENDERS = ['男性', '女性', 'その他', '回答しない']
+const PURPOSES = ['大学受験', '資格取得', 'その他']
+const GENDERS = ['男性', '女性']
 
 export function OnboardingScreen() {
   const { createProfile } = useProfile()
@@ -37,8 +37,8 @@ export function OnboardingScreen() {
   const [purposes, setPurposes] = useState<string[]>([])
 
   // Step 3: Goals
-  const [weekdayTarget, setWeekdayTarget] = useState(60) // minutes
-  const [weekendTarget, setWeekendTarget] = useState(120) // minutes
+  const [weekdayTarget, setWeekdayTarget] = useState('60')
+  const [weekendTarget, setWeekendTarget] = useState('120')
 
   const mascot = `${(process.env.EXPO_PUBLIC_API_BASE_URL || 'https://ai-yobikou.vercel.app').replace(/\/$/, '')}/images/mascot.png`
 
@@ -76,8 +76,8 @@ export function OnboardingScreen() {
         birth_date: birthDate.toISOString().split('T')[0],
         gender,
         study_purpose: purposes,
-        weekday_target_minutes: weekdayTarget,
-        weekend_target_minutes: weekendTarget,
+        weekday_target_minutes: Number(weekdayTarget),
+        weekend_target_minutes: Number(weekendTarget),
         // Legacy fields (hidden)
         school_name: '',
         current_deviation: 0,
@@ -168,6 +168,7 @@ export function OnboardingScreen() {
             value={birthDate}
             mode="date"
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            locale="ja-JP"
             onChange={(event, selectedDate) => {
               if (Platform.OS === 'android') {
                 setShowDatePicker(false)
@@ -243,43 +244,25 @@ export function OnboardingScreen() {
       <Text style={styles.stepTitle}>1日の学習目標を決めましょう</Text>
 
       <View style={styles.targetContainer}>
-        <Text style={styles.label}>平日: {Math.floor(weekdayTarget / 60)}時間 {weekdayTarget % 60}分</Text>
-        <View style={styles.presetButtons}>
-          {[30, 60, 120, 180].map((min) => (
-            <Pressable
-              key={min}
-              style={[
-                styles.presetButton,
-                weekdayTarget === min && styles.presetButtonActive,
-              ]}
-              onPress={() => setWeekdayTarget(min)}
-            >
-              <Text style={[styles.presetText, weekdayTarget === min && styles.presetTextActive]}>
-                {min / 60}時間
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <Text style={styles.label}>平日の目標学習時間（分）</Text>
+        <TextInput
+          style={styles.input}
+          keyboardType="numeric"
+          value={weekdayTarget}
+          onChangeText={setWeekdayTarget}
+          placeholder="例: 60"
+        />
       </View>
 
       <View style={styles.targetContainer}>
-        <Text style={styles.label}>休日: {Math.floor(weekendTarget / 60)}時間 {weekendTarget % 60}分</Text>
-        <View style={styles.presetButtons}>
-          {[60, 180, 300, 480].map((min) => (
-            <Pressable
-              key={min}
-              style={[
-                styles.presetButton,
-                weekendTarget === min && styles.presetButtonActive,
-              ]}
-              onPress={() => setWeekendTarget(min)}
-            >
-              <Text style={[styles.presetText, weekendTarget === min && styles.presetTextActive]}>
-                {min / 60}時間
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <Text style={styles.label}>休日の目標学習時間（分）</Text>
+        <TextInput
+          style={styles.input}
+          keyboardType="numeric"
+          value={weekendTarget}
+          onChangeText={setWeekendTarget}
+          placeholder="例: 120"
+        />
       </View>
     </View>
   )
@@ -340,15 +323,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    padding: 20,
+    padding: 24, // Increased padding
+    paddingTop: 60, // Push mascot down
     backgroundColor: '#eff6ff',
   },
   mascotWrap: {
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 20, // Increased margin
   },
   mascot: {
-    width: 80,
+    width: 80, // Slightly larger mascot
     height: 80,
     resizeMode: 'contain',
   },
@@ -403,12 +387,14 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     padding: 24,
+    justifyContent: 'center', // Center content vertically
   },
   stepContent: {
     flex: 1,
+    justifyContent: 'center', // Center step content
   },
   stepTitle: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#1e293b',
     marginBottom: 8,
@@ -424,15 +410,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#475569',
-    marginTop: 16,
-    marginBottom: 8,
+    marginTop: 12,
+    marginBottom: 6,
   },
   input: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
     borderRadius: 12,
-    padding: 14,
+    padding: 12,
     fontSize: 16,
   },
   dateInput: {
@@ -440,7 +426,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
     borderRadius: 12,
-    padding: 14,
+    padding: 12,
   },
   dateText: {
     fontSize: 16,
@@ -450,10 +436,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+    justifyContent: 'center', // Center gender buttons
+    marginTop: 10,
   },
   genderButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
     borderRadius: 20,
     backgroundColor: '#ffffff',
     borderWidth: 1,
@@ -517,29 +505,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  presetButtons: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-  },
-  presetButton: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-  },
-  presetButtonActive: {
-    backgroundColor: '#2563eb',
-  },
-  presetText: {
-    fontSize: 12,
-    color: '#475569',
-  },
-  presetTextActive: {
-    color: '#ffffff',
-    fontWeight: 'bold',
-  },
   errorText: {
     backgroundColor: '#fee2e2',
     color: '#b91c1c',
@@ -552,7 +517,7 @@ const styles = StyleSheet.create({
   footer: {
     flexDirection: 'row',
     padding: 24,
-    paddingBottom: Platform.OS === 'ios' ? 0 : 24,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 24, // Increase bottom padding
     backgroundColor: '#eff6ff',
     gap: 12,
   },

@@ -15,13 +15,80 @@ function AuthCallbackContent() {
     const verifyAttempted = useRef(false)
 
     useEffect(() => {
-        if (code && !verifyAttempted.current) {
-            verifyAttempted.current = true
-            handleVerify()
-        } else if (!code && !verified) {
-            setError('認証コードが見つかりません。')
+        const checkStatus = async () => {
+            // Check for error in search params
+            const error = searchParams.get('error')
+            const errorDescription = searchParams.get('error_description')
+            if (error) {
+                setError(errorDescription || error)
+                return
+            }
+
+            // Check for hash parameters (Implicit flow)
+            // Ensure window is available
+            let hashParams: URLSearchParams | null = null
+            if (typeof window !== 'undefined') {
+                hashParams = new URLSearchParams(window.location.hash.substring(1))
+            }
+
+            const accessToken = hashParams?.get('access_token')
+            const errorHash = hashParams?.get('error')
+            const errorDescriptionHash = hashParams?.get('error_description')
+
+            if (errorHash) {
+                setError(errorDescriptionHash || errorHash)
+                return
+            }
+
+            if (accessToken) {
+                // Handle Implicit Flow
+                const supabase = createClient()
+                const { error } = await supabase.auth.setSession({
+                    access_token: accessToken,
+                    refresh_token: hashParams?.get('refresh_token') || '',
+                })
+
+                if (error) {
+                    setError(error.message)
+                } else {
+                    setVerified(true)
+                }
+                return
+            }
+
+            // Handle PKCE Flow
+            if (code) {
+                if (!verifyAttempted.current) {
+                    verifyAttempted.current = true
+                    handleVerify()
+                }
+                return
+            }
+
+            // If no code and no hash, check if already authenticated
+            // (User might be reloading the page or visiting link without params)
+            const supabase = createClient()
+            const { data: { session } } = await supabase.auth.getSession()
+
+            if (session) {
+                setVerified(true)
+            } else {
+                // Wait a bit before showing error to ensure params are parsed
+                setTimeout(() => {
+                    if (!verified && !verifyAttempted.current) {
+                        // Double check just in case
+                        const currentCode = searchParams.get('code')
+                        const currentHash = typeof window !== 'undefined' ? window.location.hash : ''
+                        if (!currentCode && !currentHash && !session) {
+                            setError('認証コードが見つかりません。')
+                        }
+                    }
+                }, 2000)
+            }
         }
-    }, [code])
+
+        checkStatus()
+    }, [code, searchParams])
 
     const handleVerify = async () => {
         if (!code) return
