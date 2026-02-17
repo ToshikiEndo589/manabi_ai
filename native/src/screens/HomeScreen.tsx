@@ -381,6 +381,7 @@ const styles = StyleSheet.create({
   mascotImage: {
     width: 70,
     height: 70,
+    borderRadius: 35,
     resizeMode: 'cover',
   },
   balloon: {

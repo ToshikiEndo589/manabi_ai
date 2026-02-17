@@ -334,6 +334,7 @@ const styles = StyleSheet.create({
   mascot: {
     width: 80, // Slightly larger mascot
     height: 80,
+    borderRadius: 40,
     resizeMode: 'contain',
   },
   stepIndicator: {
