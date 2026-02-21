@@ -2,13 +2,9 @@ export type Profile = {
   id?: string
   user_id: string
   username: string
-  school_name?: string
-  current_deviation?: number
-  target_deviation?: number
   birth_date: string
   gender: string
   study_purpose: string[]
-  exam_date: string | null
   weekday_target_minutes?: number | null
   weekend_target_minutes?: number | null
   today_target_minutes?: number | null
@@ -17,7 +13,6 @@ export type Profile = {
   week_target_date?: string | null
   month_target_minutes?: number | null
   month_target_date?: string | null
-  avatar_url?: string | null
   onboarding_completed: boolean
   created_at?: string | null
   updated_at?: string | null
@@ -48,7 +43,8 @@ export type ReferenceBook = {
 export type ReviewTask = {
   id: string
   user_id: string
-  study_log_id: string
+  study_log_id?: string | null
+  review_material_id?: string | null
   due_at: string
   status: string
   study_logs?: {
@@ -57,4 +53,20 @@ export type ReviewTask = {
     started_at: string | null
     reference_book_id?: string | null
   } | null
+  review_materials?: {
+    subject: string
+    content: string
+    reference_book_id: string | null
+    created_at?: string | null
+  } | null
+}
+
+export type ReviewMaterial = {
+  id: string
+  user_id: string
+  reference_book_id: string | null
+  subject: string
+  content: string
+  created_at?: string | null
+  updated_at?: string | null
 }

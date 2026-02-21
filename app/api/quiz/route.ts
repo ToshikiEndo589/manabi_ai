@@ -55,6 +55,31 @@ export async function POST(req: NextRequest) {
 
     const extractedText = completion.choices[0]?.message?.content?.trim()
 
+    // --- トークン数と料金の計算・ログ出力 ---
+    const usage = completion.usage
+    if (usage) {
+      const inputTokens = usage.prompt_tokens
+      const outputTokens = usage.completion_tokens
+      const totalTokens = usage.total_tokens
+
+      // gpt-5-mini pricing (from user screenshot):
+      // Input: $0.25 / 1M tokens
+      // Output: $2.00 / 1M tokens
+      const inputCostUSD = (inputTokens / 1_000_000) * 0.25
+      const outputCostUSD = (outputTokens / 1_000_000) * 2.00
+      const totalCostUSD = inputCostUSD + outputCostUSD
+
+      // 1ドル = 155円
+      const totalCostJPY = totalCostUSD * 155
+
+      console.log('--- OpenAI API Usage (gpt-5-mini) ---')
+      console.log(`Input Tokens:  ${inputTokens} ($${inputCostUSD.toFixed(6)})`)
+      console.log(`Output Tokens: ${outputTokens} ($${outputCostUSD.toFixed(6)})`)
+      console.log(`Total Tokens:  ${totalTokens}`)
+      console.log(`Total Cost:    $${totalCostUSD.toFixed(6)} (約 ${totalCostJPY.toFixed(4)} 円)`)
+      console.log('---------------------------------------')
+    }
+
     if (!extractedText) {
       return NextResponse.json({ error: 'empty response' }, { status: 500 })
     }
@@ -96,7 +121,20 @@ export async function POST(req: NextRequest) {
       })
       .filter((q) => q.question && q.correct_index >= 0 && q.correct_index < 4)
 
-    return NextResponse.json({ questions })
+    let usageData = undefined
+    if (usage) {
+      usageData = {
+        inputTokens: usage.prompt_tokens,
+        outputTokens: usage.completion_tokens,
+        totalTokens: usage.total_tokens,
+        inputCostUSD: (usage.prompt_tokens / 1_000_000) * 0.25,
+        outputCostUSD: (usage.completion_tokens / 1_000_000) * 2.00,
+        totalCostUSD: ((usage.prompt_tokens / 1_000_000) * 0.25) + ((usage.completion_tokens / 1_000_000) * 2.00),
+        totalCostJPY: (((usage.prompt_tokens / 1_000_000) * 0.25) + ((usage.completion_tokens / 1_000_000) * 2.00)) * 155,
+      }
+    }
+
+    return NextResponse.json({ questions, usage: usageData })
   } catch (error) {
     console.error('Quiz API error:', error)
     // エラーの詳細をログに出力

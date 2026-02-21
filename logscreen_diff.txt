@@ -1,0 +1,457 @@
+﻿diff --git a/native/src/screens/LogScreen.tsx b/native/src/screens/LogScreen.tsx
+index 0a2ef6b6..573653ea 100644
+--- a/native/src/screens/LogScreen.tsx
++++ b/native/src/screens/LogScreen.tsx
+@@ -94,10 +94,10 @@ export function LogScreen() {
+   const [editMinutes, setEditMinutes] = useState('')
+   const [editDate, setEditDate] = useState(new Date())
+   const [showEditDatePicker, setShowEditDatePicker] = useState(false)
+-  const [showEditNotes, setShowEditNotes] = useState(false)
++  const [showEditNotes, setShowEditNotes] = useState(false) // Keeping this as false if it's still ref'd somewhere else safely
+   const [editingNoteLogIds, setEditingNoteLogIds] = useState<string[]>([])
+   const [editNote, setEditNote] = useState('')
+-  const [showPastGoals, setShowPastGoals] = useState(false)
++
+   const [materialRangeType, setMaterialRangeType] = useState<'day' | 'week' | 'month' | 'total'>('day')
+   const [dayOffset, setDayOffset] = useState(0)
+   const [weekOffset, setWeekOffset] = useState(1)
+@@ -118,13 +118,18 @@ export function LogScreen() {
+   const [showAllMemoLogs, setShowAllMemoLogs] = useState(false)
+ 
+   const normalizePickerDate = (date: Date) => {
+-    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0)
++    // Reset to midnight local time to avoid confusion
++    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0)
+   }
+ 
+   const buildStartedAtFromDisplayedDate = (date: Date) => {
+-    // Simple: use the selected date at noon UTC
+-    const [year, month, day] = formatDateInput(date).split('-').map(Number)
+-    return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0))
++    // Construct UTC date directly from local components, manually as a string
++    // This is safer than new Date(Date.UTC(...)) if we want to be absolutely sure what string goes to DB
++    const year = date.getFullYear()
++    const month = String(date.getMonth() + 1).padStart(2, '0')
++    const day = String(date.getDate()).padStart(2, '0')
++    const isoString = `${year}-${month}-${day}T00:00:00.000Z`
++    return new Date(isoString)
+   }
+ 
+   const loadData = async () => {
+@@ -183,6 +188,7 @@ export function LogScreen() {
+     setLoading(false)
+   }
+ 
++
+   useEffect(() => {
+     loadData()
+   }, [userId])
+@@ -284,35 +290,7 @@ export function LogScreen() {
+ 
+ 
+ 
+-  const deleteGroup = async (group: typeof groupedEditLogs[0]) => {
+-    Alert.alert(
+-      '蜑企勁遒ｺ隱・,
+-      `${group.studyDay}縺ｮ${group.subject}縺ｮ險倬鹸繧貞炎髯､縺励∪縺吶°・歔,
+-      [
+-        { text: '繧ｭ繝｣繝ｳ繧ｻ繝ｫ', style: 'cancel' },
+-        {
+-          text: '蜑企勁',
+-          style: 'destructive',
+-          onPress: async () => {
+-            try {
+-              const { error } = await supabase
+-                .from('study_logs')
+-                .delete()
+-                .in('id', group.ids)
+ 
+-              if (error) throw error
+-
+-              await loadData()
+-              Alert.alert('蜑企勁螳御ｺ・, '蟄ｦ鄙定ｨ倬鹸繧貞炎髯､縺励∪縺励◆縲・)
+-            } catch (err) {
+-              console.error('Delete error:', err)
+-              Alert.alert('繧ｨ繝ｩ繝ｼ', '蜑企勁縺ｫ螟ｱ謨励＠縺ｾ縺励◆縲・)
+-            }
+-          }
+-        }
+-      ]
+-    )
+-  }
+ 
+   const handleManualSubmit = async () => {
+     if (!manualBookId) {
+@@ -338,6 +316,11 @@ export function LogScreen() {
+ 
+     const startedAt = buildStartedAtFromDisplayedDate(manualDate)
+ 
++    // DEBUG: Check values
++    console.log('Manual Date (Local):', manualDate.toString())
++    console.log('Started At (Generated):', startedAt.toISOString())
++    Alert.alert('Debug Date', `Local: ${manualDate.toString()}\nGenerated: ${startedAt.toISOString()}`)
++
+     const { data, error } = await supabase
+       .from('study_logs')
+       .insert({
+@@ -350,6 +333,12 @@ export function LogScreen() {
+       })
+       .select()
+       .single()
++
++    if (data) {
++      console.log('Supabase Return:', data.started_at)
++      Alert.alert('Saved Data', `Saved: ${data.started_at}\nTarget: ${startedAt.toISOString()}`)
++    }
++
+     if (error) {
+       Alert.alert('菫晏ｭ倥お繝ｩ繝ｼ', error.message)
+       return
+@@ -409,12 +398,16 @@ export function LogScreen() {
+         reference_book_id: string | null
+         started_at: string
+         study_minutes: number
+-        note: string | null
+         studyDay: string
+       }
+     >()
+     studyLogs.forEach((log) => {
+       const studyDay = getStudyDay(new Date(log.started_at))
++      // DEBUG: Log the processing of the first few logs to avoid spam
++      if (Math.random() < 0.05) {
++        console.log(`Log Debug: ID=${log.id} Started=${log.started_at} Day=${studyDay}`)
++      }
++
+       const keyBase = log.reference_book_id ? `book:${log.reference_book_id}` : `subject:${log.subject}`
+       const key = `${studyDay}::${keyBase}`
+       const existing = groups.get(key)
+@@ -425,18 +418,14 @@ export function LogScreen() {
+           reference_book_id: log.reference_book_id || null,
+           started_at: log.started_at,
+           study_minutes: log.study_minutes,
+-          note: log.note || null,
+           studyDay,
+         })
+       } else {
+         existing.ids.push(log.id)
+         existing.study_minutes += log.study_minutes
+-        if (log.note && log.note.trim()) {
+-          existing.note = existing.note ? `${existing.note}\n\n${log.note.trim()}` : log.note.trim()
+-        }
+       }
+     })
+-    return Array.from(groups.values())
++    return Array.from(groups.values()).filter((g) => g.study_minutes > 0)
+   }, [studyLogs])
+ 
+   const startEditGroup = (group: (typeof groupedEditLogs)[number]) => {
+@@ -457,6 +446,11 @@ export function LogScreen() {
+     setEditDate(new Date())
+   }
+ 
++  const deleteLogs = async (ids: string[]) => {
++    const { error: deleteError } = await supabase.from('study_logs').delete().in('id', ids)
++    if (deleteError) console.error('Error deleting logs:', deleteError)
++  }
++
+   const saveEditLog = async () => {
+     if (editingLogIds.length === 0) return
+     const minutes = parseInt(editMinutes, 10)
+@@ -484,44 +478,34 @@ export function LogScreen() {
+     }
+     if (editingLogIds.length > 1) {
+       const idsToDelete = editingLogIds.filter((id) => id !== targetId)
+-      await supabase.from('study_logs').delete().in('id', idsToDelete)
++      await deleteLogs(idsToDelete)
+     }
+     cancelEditLog()
+     await loadData()
+   }
+ 
+-  const deleteLogGroup = async (ids: string[]) => {
+-    await supabase.from('study_logs').delete().in('id', ids)
+-    await loadData()
+-  }
+-
+-  const startEditNote = (group: (typeof groupedEditLogs)[number]) => {
+-    setEditingNoteLogIds(group.ids)
+-    setEditNote(group.note || '')
+-  }
+-
+-  const cancelEditNote = () => {
+-    setEditingNoteLogIds([])
+-    setEditNote('')
+-  }
+-
+-  const saveEditNote = async () => {
+-    if (editingNoteLogIds.length === 0) return
+-
+-    // Update all logs in the group with the new note
+-    const { error } = await supabase
+-      .from('study_logs')
+-      .update({ note: editNote.trim() || null })
+-      .in('id', editingNoteLogIds)
+-
+-    if (error) {
+-      Alert.alert('譖ｴ譁ｰ繧ｨ繝ｩ繝ｼ', error.message)
+-      return
+-    }
+-
+-    cancelEditNote()
+-    await loadData()
+-    Alert.alert('菫晏ｭ伜ｮ御ｺ・, '蠕ｩ鄙偵き繝ｼ繝峨ｒ譖ｴ譁ｰ縺励∪縺励◆縲・)
++  const deleteGroup = async (group: typeof groupedEditLogs[0]) => {
++    Alert.alert(
++      '蜑企勁遒ｺ隱・,
++      `${group.studyDay}縺ｮ${group.subject}縺ｮ險倬鹸繧貞炎髯､縺励∪縺吶°・歔,
++      [
++        { text: '繧ｭ繝｣繝ｳ繧ｻ繝ｫ', style: 'cancel' },
++        {
++          text: '蜑企勁',
++          style: 'destructive',
++          onPress: async () => {
++            try {
++              await deleteLogs(group.ids)
++              await loadData()
++              Alert.alert('蜑企勁螳御ｺ・, '蟄ｦ鄙定ｨ倬鹸繧貞炎髯､縺励∪縺励◆縲・)
++            } catch (err) {
++              console.error('Delete error:', err)
++              Alert.alert('繧ｨ繝ｩ繝ｼ', '蜑企勁縺ｫ螟ｱ謨励＠縺ｾ縺励◆縲・)
++            }
++          },
++        },
++      ]
++    )
+   }
+ 
+   const buildShareText = () => {
+@@ -548,50 +532,7 @@ export function LogScreen() {
+     }
+   }
+ 
+-  const getDailyTargetForDate = (date: Date) => {
+-    if (!profile) return 60
+-    const day = date.getDay()
+-    const isWeekend = day === 0 || day === 6
+-    const defaultTarget = isWeekend
+-      ? profile.weekend_target_minutes ?? 120
+-      : profile.weekday_target_minutes ?? 60
+-    const dateString = formatDateInput(date)
+-    if (profile.today_target_date === dateString && profile.today_target_minutes) {
+-      return profile.today_target_minutes
+-    }
+-    return defaultTarget
+-  }
+-
+-  const getWeekTarget = (weekStart: Date) => {
+-    if (!profile) return 420
+-    const weekStartDateString = formatDateInput(weekStart)
+-    if (profile.week_target_date === weekStartDateString && profile.week_target_minutes) {
+-      return profile.week_target_minutes
+-    }
+-    let total = 0
+-    const cursor = new Date(weekStart)
+-    for (let i = 0; i < 7; i++) {
+-      total += getDailyTargetForDate(cursor)
+-      cursor.setDate(cursor.getDate() + 1)
+-    }
+-    return total
+-  }
+ 
+-  const getMonthTarget = (monthStart: Date) => {
+-    if (!profile) return 1800
+-    const monthStartDateString = formatDateInput(monthStart)
+-    if (profile.month_target_date === monthStartDateString && profile.month_target_minutes) {
+-      return profile.month_target_minutes
+-    }
+-    let total = 0
+-    const cursor = new Date(monthStart)
+-    const end = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1)
+-    while (cursor < end) {
+-      total += getDailyTargetForDate(cursor)
+-      cursor.setDate(cursor.getDate() + 1)
+-    }
+-    return total
+-  }
+ 
+   const logsRangeTotals = useMemo(() => {
+     const range =
+@@ -888,11 +829,21 @@ export function LogScreen() {
+           </View>
+           <View style={styles.chartArea}>
+             <View style={styles.chartRow}>
+-              <View style={styles.yAxis}>
+-                <Text style={styles.yAxisTitle}>譎る俣</Text>
+-                <Text style={styles.yAxisLabel}>{formatMinutes(maxChartMinutes)}</Text>
+-                <Text style={styles.yAxisLabel}>{formatMinutes(Math.round(maxChartMinutes / 2))}</Text>
+-                <Text style={styles.yAxisLabel}>0</Text>
++              <View style={{ width: 44, paddingBottom: 0 }}>
++                <View style={{ minHeight: 130, justifyContent: 'flex-end' }}>
++                  <Text style={[styles.yAxisTitle, { position: 'absolute', top: -5, left: 0 }]}>譎る俣</Text>
++                  <View style={{ height: 120, justifyContent: 'space-between' }}>
++                    <Text style={[styles.yAxisLabel, { transform: [{ translateY: -6 }] }]}>{formatMinutes(maxChartMinutes)}</Text>
++                    <Text style={[styles.yAxisLabel, { transform: [{ translateY: 0 }] }]}>{formatMinutes(Math.round(maxChartMinutes / 2))}</Text>
++                    <Text style={[styles.yAxisLabel, { transform: [{ translateY: 6 }] }]}>0</Text>
++                  </View>
++                </View>
++                <View style={[styles.chartLabels, { opacity: 0 }]}>
++                  <View style={styles.chartLabelContainer}>
++                    <Text style={styles.chartLabel}>X</Text>
++                    <Text style={styles.chartWeekday}>X</Text>
++                  </View>
++                </View>
+               </View>
+               <View style={styles.chartBody}>
+                 <View style={styles.chartBars}>
+@@ -1295,7 +1246,7 @@ export function LogScreen() {
+                           <Pressable style={styles.outlineButton} onPress={cancelEditLog}>
+                             <Text style={styles.outlineButtonText}>繧ｭ繝｣繝ｳ繧ｻ繝ｫ</Text>
+                           </Pressable>
+-                          <Pressable style={styles.deleteButton} onPress={() => deleteLogGroup(group.ids)}>
++                          <Pressable style={styles.deleteButton} onPress={() => deleteLogs(group.ids)}>
+                             <Text style={styles.deleteText}>蜑企勁</Text>
+                           </Pressable>
+                         </View>
+@@ -1328,144 +1279,9 @@ export function LogScreen() {
+           )}
+         </View>
+ 
+-        <View style={styles.card}>
+-          <View style={styles.headerRow}>
+-            <View>
+-              <Text style={styles.sectionTitle}>蠕ｩ鄙偵き繝ｼ繝峨・菫ｮ豁｣</Text>
+-              <Text style={styles.sectionSubtitle}>蠕ｩ鄙偵き繝ｼ繝峨・蜀・ｮｹ繧堤ｷｨ髮・〒縺阪∪縺・/Text>
+-            </View>
+-            <Pressable style={styles.plusButton} onPress={() => setShowEditNotes((prev) => !prev)}>
+-              <Ionicons name={showEditNotes ? 'remove' : 'add'} size={18} color="#334155" />
+-            </Pressable>
+-          </View>
+-          {showEditNotes && (
+-            <>
+-              {groupedEditLogs.filter(g => g.note).length === 0 && <Text style={styles.mutedText}>蠕ｩ鄙偵き繝ｼ繝峨′縺ゅｊ縺ｾ縺帙ｓ</Text>}
+-              <ScrollView style={{ maxHeight: 600 }} nestedScrollEnabled>
+-                {groupedEditLogs.filter(g => g.note).slice(0, 6).map((group) => {
+-                  const isEditing = editingNoteLogIds.some(id => group.ids.includes(id))
+-                  return (
+-                    <View key={`${group.studyDay}-${group.subject}-${group.reference_book_id || 'none'}-note`} style={styles.logItem}>
+-                      {isEditing ? (
+-                        <View>
+-                          <Text style={styles.mutedText}>{group.studyDay}</Text>
+-                          <Text style={styles.logTitle}>
+-                            {group.subject} / {formatMinutes(group.study_minutes)}
+-                          </Text>
+-                          <Text style={styles.label}>蠕ｩ鄙偵き繝ｼ繝牙・螳ｹ</Text>
+-                          <TextInput
+-                            style={[styles.input, { minHeight: 120, textAlignVertical: 'top', backgroundColor: '#f8fafc', padding: 12 }]}
+-                            value={editNote}
+-                            onChangeText={setEditNote}
+-                            multiline
+-                            autoFocus
+-                            placeholder="蠕ｩ鄙偵き繝ｼ繝峨・蜀・ｮｹ繧貞・蜉・.."
+-                          />
+-                          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+-                            <Pressable style={styles.primaryButton} onPress={saveEditNote}>
+-                              <Text style={styles.primaryButtonText}>菫晏ｭ・/Text>
+-                            </Pressable>
+-                            <Pressable style={styles.outlineButton} onPress={cancelEditNote}>
+-                              <Text style={styles.outlineButtonText}>繧ｭ繝｣繝ｳ繧ｻ繝ｫ</Text>
+-                            </Pressable>
+-                          </View>
+-                        </View>
+-                      ) : (
+-                        <View>
+-                          <Text style={styles.mutedText}>{group.studyDay}</Text>
+-                          <Text style={styles.logTitle}>
+-                            {group.subject} / {formatMinutes(group.study_minutes)}
+-                          </Text>
+-                          {group.note && <Text style={styles.noteText}>{group.note}</Text>}
+-                          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+-                            <Pressable style={styles.outlineButton} onPress={() => startEditNote(group)}>
+-                              <Text style={styles.outlineButtonText}>邱ｨ髮・/Text>
+-                            </Pressable>
+-                          </View>
+-                        </View>
+-                      )}
+-                    </View>
+-                  )
+-                })}
+-              </ScrollView>
+-            </>
+-          )}
+-        </View>
+ 
+-        {profile && (
+-          <View style={styles.card}>
+-            <View style={styles.headerRow}>
+-              <View>
+-                <Text style={styles.sectionTitle}>驕主悉縺ｮ逶ｮ讓咎＃謌千憾豕・/Text>
+-                <Text style={styles.sectionSubtitle}>驕主悉縺ｮ譌･繝ｻ騾ｱ繝ｻ譛医・逶ｮ讓咎＃謌千憾豕√ｒ遒ｺ隱・/Text>
+-              </View>
+-              <Pressable style={styles.plusButton} onPress={() => setShowPastGoals((prev) => !prev)}>
+-                <Ionicons name={showPastGoals ? 'remove' : 'add'} size={18} color="#334155" />
+-              </Pressable>
+-            </View>
+-            {showPastGoals && (
+-              <>
+-                {[1, 2, 3, 4, 5].map((i) => {
+-                  const date = new Date()
+-                  date.setDate(date.getDate() - i)
+-                  const target = getDailyTargetForDate(date)
+-                  const dayStart = new Date(date)
+-                  dayStart.setHours(3, 0, 0, 0)
+-                  const dayEnd = new Date(dayStart)
+-                  dayEnd.setDate(dayEnd.getDate() + 1)
+-                  const actual = getMinutesInRange(dayStart, dayEnd)
+-                  const progress = Math.min(100, Math.round((actual / Math.max(1, target)) * 100))
+-                  return (
+-                    <View key={`past-day-${i}`} style={styles.goalItem}>
+-                      <Text style={styles.mutedText}>{date.toLocaleDateString('ja-JP')}</Text>
+-                      <Text style={styles.goalText}>
+-                        {formatMinutes(actual)} / {formatMinutes(target)}・磯＃謌千紫 {progress}%・・-                      </Text>
+-                      <ProgressBar progress={progress} />
+-                    </View>
+-                  )
+-                })}
+-                {[1, 2, 3].map((i) => {
+-                  const weekStart = getThisWeekStart()
+-                  weekStart.setDate(weekStart.getDate() - 7 * i)
+-                  const weekEnd = new Date(weekStart)
+-                  weekEnd.setDate(weekEnd.getDate() + 7)
+-                  const target = getWeekTarget(weekStart)
+-                  const actual = getMinutesInRange(weekStart, weekEnd)
+-                  const progress = Math.min(100, Math.round((actual / Math.max(1, target)) * 100))
+-                  return (
+-                    <View key={`past-week-${i}`} style={styles.goalItem}>
+-                      <Text style={styles.mutedText}>{formatDateLabel(weekStart)} 騾ｱ</Text>
+-                      <Text style={styles.goalText}>
+-                        {formatMinutes(actual)} / {formatMinutes(target)}・磯＃謌千紫 {progress}%・・-                      </Text>
+-                      <ProgressBar progress={progress} />
+-                    </View>
+-                  )
+-                })}
+-                {[1, 2, 3].map((i) => {
+-                  const monthStart = getThisMonthStart()
+-                  monthStart.setMonth(monthStart.getMonth() - i)
+-                  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1)
+-                  const target = getMonthTarget(monthStart)
+-                  const actual = getMinutesInRange(monthStart, monthEnd)
+-                  const progress = Math.min(100, Math.round((actual / Math.max(1, target)) * 100))
+-                  return (
+-                    <View key={`past-month-${i}`} style={styles.goalItem}>
+-                      <Text style={styles.mutedText}>
+-                        {monthStart.getFullYear()}蟷ｴ{monthStart.getMonth() + 1}譛・-                      </Text>
+-                      <Text style={styles.goalText}>
+-                        {formatMinutes(actual)} / {formatMinutes(target)}・磯＃謌千紫 {progress}%・・-                      </Text>
+-                      <ProgressBar progress={progress} />
+-                    </View>
+-                  )
+-                })}
+-              </>
+-            )}
+-          </View>
+-        )}
++
++
+ 
+         {/* --- Home Screen Features (Merged) --- */}
+         <View style={styles.divider} />

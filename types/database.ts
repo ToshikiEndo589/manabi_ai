@@ -100,11 +100,50 @@ export interface Database {
           created_at?: string
         }
       }
+      review_materials: {
+        Row: {
+          id: string
+          user_id: string
+          reference_book_id: string | null
+          subject: string
+          content: string
+          sm2_interval: number
+          sm2_ease_factor: number
+          sm2_repetitions: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          reference_book_id?: string | null
+          subject: string
+          content: string
+          sm2_interval?: number
+          sm2_ease_factor?: number
+          sm2_repetitions?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          reference_book_id?: string | null
+          subject?: string
+          content?: string
+          sm2_interval?: number
+          sm2_ease_factor?: number
+          sm2_repetitions?: number
+          created_at?: string
+          updated_at?: string
+        }
+      }
       review_tasks: {
         Row: {
           id: string
           user_id: string
-          study_log_id: string
+          study_log_id: string | null
+          review_material_id: string | null
           due_at: string
           status: string
           created_at: string
@@ -112,7 +151,8 @@ export interface Database {
         Insert: {
           id?: string
           user_id: string
-          study_log_id: string
+          study_log_id?: string | null
+          review_material_id?: string | null
           due_at: string
           status?: string
           created_at?: string
@@ -120,7 +160,8 @@ export interface Database {
         Update: {
           id?: string
           user_id?: string
-          study_log_id?: string
+          study_log_id?: string | null
+          review_material_id?: string | null
           due_at?: string
           status?: string
           created_at?: string
@@ -200,3 +241,4 @@ export interface Database {
 export type Profile = Database['public']['Tables']['profiles']['Row']
 export type StudyLog = Database['public']['Tables']['study_logs']['Row']
 export type ReferenceBook = Database['public']['Tables']['reference_books']['Row']
+export type ReviewMaterial = Database['public']['Tables']['review_materials']['Row']

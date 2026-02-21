@@ -33,14 +33,10 @@ export function HomeScreen() {
   const [monthOverride, setMonthOverride] = useState('')
 
   const loadData = useCallback(async () => {
-    console.log('=== Loading Data ===')
     const [profileResult, logsResult] = await Promise.all([
       supabase.from('profiles').select('*').eq('user_id', userId).single(),
       supabase.from('study_logs').select('*').eq('user_id', userId).order('started_at', { ascending: false }),
     ])
-    console.log('Profile result:', profileResult.data)
-    console.log('Logs result count:', logsResult.data?.length || 0)
-    console.log('Logs result sample:', logsResult.data?.slice(0, 3))
 
     if (profileResult.data) {
       setProfile(profileResult.data as Profile)
@@ -54,10 +50,6 @@ export function HomeScreen() {
       const weekStr = `${week.getUTCFullYear()}-${String(week.getUTCMonth() + 1).padStart(2, '0')}-${String(week.getUTCDate()).padStart(2, '0')}`
       const monthStr = `${month.getUTCFullYear()}-${String(month.getUTCMonth() + 1).padStart(2, '0')}-${String(month.getUTCDate()).padStart(2, '0')}`
 
-      console.log('Date strings - today:', todayStr, 'week:', weekStr, 'month:', monthStr)
-      console.log('Profile week_target_date:', profileResult.data.week_target_date)
-      console.log('Profile week_target_minutes:', profileResult.data.week_target_minutes)
-
       if (profileResult.data.today_target_date === todayStr && profileResult.data.today_target_minutes) {
         setTodayOverride(String(profileResult.data.today_target_minutes))
       }
@@ -69,7 +61,6 @@ export function HomeScreen() {
       }
     }
     setStudyLogs((logsResult.data || []) as StudyLog[])
-    console.log('===================')
   }, [userId])
 
   useEffect(() => {
@@ -92,25 +83,15 @@ export function HomeScreen() {
     const weekStr = `${weekStart.getUTCFullYear()}-${String(weekStart.getUTCMonth() + 1).padStart(2, '0')}-${String(weekStart.getUTCDate()).padStart(2, '0')}`
     const monthStr = `${monthStart.getUTCFullYear()}-${String(monthStart.getUTCMonth() + 1).padStart(2, '0')}-${String(monthStart.getUTCDate()).padStart(2, '0')}`
 
-    console.log('=== HomeScreen Debug ===')
-    console.log('todayStr:', todayStr, 'weekStr:', weekStr, 'monthStr:', monthStr)
-    console.log('studyLogs count:', studyLogs.length)
-
     const today = studyLogs.reduce((sum, log) => {
       const logDay = getStudyDay(new Date(log.started_at))
       const isToday = logDay === todayStr
-      if (studyLogs.length <= 5) {
-        console.log(`Log: ${log.study_minutes}分, started_at: ${log.started_at}, logDay: ${logDay}, isToday: ${isToday}`)
-      }
       return isToday ? sum + log.study_minutes : sum
     }, 0)
 
     const week = studyLogs.reduce((sum, log) => {
       const logDay = getStudyDay(new Date(log.started_at))
       const isThisWeek = logDay >= weekStr
-      if (studyLogs.length <= 5) {
-        console.log(`Log: ${log.study_minutes}分, logDay: ${logDay}, weekStr: ${weekStr}, isThisWeek: ${isThisWeek}`)
-      }
       return isThisWeek ? sum + log.study_minutes : sum
     }, 0)
 
@@ -120,9 +101,6 @@ export function HomeScreen() {
     }, 0)
 
     const total = studyLogs.reduce((sum, log) => sum + log.study_minutes, 0)
-
-    console.log('Results - today:', today, 'week:', week, 'month:', month, 'total:', total)
-    console.log('======================')
 
     return { todayMinutes: today, weekMinutes: week, monthMinutes: month, totalMinutes: total }
   }, [studyLogs])

@@ -10,13 +10,13 @@ import {
   TextInput,
   View,
   TouchableOpacity,
+  Modal,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { useProfile } from '../contexts/ProfileContext'
 import { supabase } from '../lib/supabase'
-
-const PURPOSES = ['大学受験', '資格取得', 'その他']
-const GENDERS = ['男性', '女性']
 
 export function SettingsScreen() {
   const { profile, updateProfile } = useProfile()
@@ -25,13 +25,14 @@ export function SettingsScreen() {
   const [username, setUsername] = useState('')
   const [birthDate, setBirthDate] = useState(new Date(2008, 0, 1))
   const [showDatePicker, setShowDatePicker] = useState(false)
-  const [gender, setGender] = useState('')
-  const [purposes, setPurposes] = useState<string[]>([])
+
+  // Deletion State
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false)
+  const [deleteReason, setDeleteReason] = useState('')
 
   // Study Targets
   const [weekdayTarget, setWeekdayTarget] = useState('60')
   const [weekendTarget, setWeekendTarget] = useState('120')
-
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -40,8 +41,6 @@ export function SettingsScreen() {
       if (profile.birth_date) {
         setBirthDate(new Date(profile.birth_date))
       }
-      setGender(profile.gender || '')
-      setPurposes(profile.study_purpose || [])
       setWeekdayTarget(String(profile.weekday_target_minutes ?? 60))
       setWeekendTarget(String(profile.weekend_target_minutes ?? 120))
     }
@@ -52,9 +51,7 @@ export function SettingsScreen() {
     try {
       await updateProfile({
         username,
-        birth_date: birthDate.toISOString().split('T')[0],
-        gender,
-        study_purpose: purposes,
+        birth_date: `${birthDate.getFullYear()}-${String(birthDate.getMonth() + 1).padStart(2, '0')}-${String(birthDate.getDate()).padStart(2, '0')}`,
         weekday_target_minutes: Number(weekdayTarget),
         weekend_target_minutes: Number(weekendTarget),
       })
@@ -66,16 +63,44 @@ export function SettingsScreen() {
     }
   }
 
-  const togglePurpose = (purpose: string) => {
-    if (purposes.includes(purpose)) {
-      setPurposes(purposes.filter((p) => p !== purpose))
-    } else {
-      setPurposes([...purposes, purpose])
-    }
-  }
-
   const handleLogout = async () => {
     await supabase.auth.signOut()
+  }
+
+  const handleDeleteAccount = () => {
+    setDeleteModalVisible(true)
+  }
+
+  const executeDeleteAccount = async () => {
+    if (!deleteReason.trim()) {
+      Alert.alert('エラー', '退会理由を入力してください。')
+      return
+    }
+
+    Alert.alert(
+      '最終確認',
+      '本当に退会しますか？\nすべてのデータが削除され、復元することはできません。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '退会する',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true)
+            try {
+              const { error } = await supabase.rpc('delete_user', { reason: deleteReason })
+              if (error) throw error
+              await supabase.auth.signOut()
+              setDeleteModalVisible(false)
+              Alert.alert('完了', 'アカウントを削除しました。')
+            } catch (error: any) {
+              Alert.alert('エラー', error?.message ?? '削除に失敗しました。')
+              setLoading(false)
+            }
+          },
+        },
+      ]
+    )
   }
 
   return (
@@ -85,6 +110,8 @@ export function SettingsScreen() {
       keyboardVerticalOffset={80}
     >
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        {/* ... existing card views ... */}
+
         <View style={styles.card}>
           <Text style={styles.cardTitle}>プロフィール設定</Text>
           <Text style={styles.cardSubtitle}>基本情報を変更できます</Text>
@@ -122,6 +149,7 @@ export function SettingsScreen() {
                 value={birthDate}
                 mode="date"
                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                locale="ja-JP"
                 onChange={(event, selectedDate) => {
                   if (Platform.OS === 'android') {
                     setShowDatePicker(false)
@@ -132,57 +160,6 @@ export function SettingsScreen() {
               />
             </View>
           )}
-
-          <Text style={styles.label}>性別</Text>
-          <View style={styles.genderContainer}>
-            {GENDERS.map((g) => (
-              <Pressable
-                key={g}
-                style={[
-                  styles.genderButton,
-                  gender === g && styles.genderButtonActive,
-                ]}
-                onPress={() => setGender(g)}
-              >
-                <Text
-                  style={[
-                    styles.genderText,
-                    gender === g && styles.genderTextActive,
-                  ]}
-                >
-                  {g}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <Text style={styles.label}>利用目的（複数選択可）</Text>
-          <View style={styles.purposeList}>
-            {PURPOSES.map((purpose) => (
-              <Pressable
-                key={purpose}
-                style={[
-                  styles.purposeItem,
-                  purposes.includes(purpose) && styles.purposeItemActive,
-                ]}
-                onPress={() => togglePurpose(purpose)}
-              >
-                <Text
-                  style={[
-                    styles.purposeText,
-                    purposes.includes(purpose) && styles.purposeTextActive,
-                  ]}
-                >
-                  {purpose}
-                </Text>
-                {purposes.includes(purpose) && (
-                  <View style={styles.checkIcon}>
-                    <Text style={styles.checkIconText}>✓</Text>
-                  </View>
-                )}
-              </Pressable>
-            ))}
-          </View>
         </View>
 
         <View style={styles.card}>
@@ -212,6 +189,61 @@ export function SettingsScreen() {
         <Pressable style={styles.logoutButton} onPress={handleLogout}>
           <Text style={styles.logoutText}>ログアウト</Text>
         </Pressable>
+
+        <Pressable style={styles.deleteAccountButton} onPress={handleDeleteAccount}>
+          <Text style={styles.deleteAccountText}>アカウントを削除（退会）</Text>
+        </Pressable>
+
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={deleteModalVisible}
+          onRequestClose={() => setDeleteModalVisible(false)}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalOverlay}
+          >
+            <TouchableWithoutFeedback
+              onPress={() => Keyboard.dismiss()}
+            >
+              <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>退会手続き</Text>
+                <Text style={styles.modalText}>
+                  退会理由を入力してください。{'\n'}
+                  この操作は取り消せません。
+                </Text>
+
+                <TextInput
+                  style={styles.textArea}
+                  multiline
+                  numberOfLines={4}
+                  placeholder="退会理由をご記入ください"
+                  value={deleteReason}
+                  onChangeText={setDeleteReason}
+                />
+
+                <View style={styles.modalButtons}>
+                  <Pressable
+                    style={[styles.modalButton, styles.modalButtonCancel]}
+                    onPress={() => setDeleteModalVisible(false)}
+                  >
+                    <Text style={styles.modalButtonText}>キャンセル</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.modalButton, styles.modalButtonDelete]}
+                    onPress={executeDeleteAccount}
+                    disabled={loading}
+                  >
+                    <Text style={[styles.modalButtonText, styles.modalButtonTextDelete]}>
+                      {loading ? '処理中...' : '退会する'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </KeyboardAvoidingView>
+        </Modal>
       </ScrollView>
     </KeyboardAvoidingView>
   )
@@ -288,69 +320,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 16,
   },
-  genderContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  genderButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  genderButtonActive: {
-    backgroundColor: '#eff6ff',
-    borderColor: '#2563eb',
-  },
-  genderText: {
-    color: '#64748b',
-    fontSize: 14,
-  },
-  genderTextActive: {
-    color: '#2563eb',
-    fontWeight: 'bold',
-  },
-  purposeList: {
-    gap: 8,
-  },
-  purposeItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#ffffff',
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  purposeItemActive: {
-    backgroundColor: '#eff6ff',
-    borderColor: '#2563eb',
-  },
-  purposeText: {
-    fontSize: 14,
-    color: '#1e293b',
-  },
-  purposeTextActive: {
-    color: '#2563eb',
-    fontWeight: '600',
-  },
-  checkIcon: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#2563eb',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  checkIconText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
   primaryButton: {
     backgroundColor: '#2563eb',
     paddingVertical: 14,
@@ -375,5 +344,74 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '600',
     fontSize: 16,
+  },
+  deleteAccountButton: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginTop: 8,
+    marginBottom: 24,
+  },
+  deleteAccountText: {
+    color: '#ef4444',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    gap: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1e293b',
+    textAlign: 'center',
+  },
+  modalText: {
+    fontSize: 16,
+    color: '#475569',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  textArea: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    padding: 12,
+    height: 120,
+    textAlignVertical: 'top',
+    backgroundColor: '#f8fafc',
+    fontSize: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonCancel: {
+    backgroundColor: '#f1f5f9',
+  },
+  modalButtonDelete: {
+    backgroundColor: '#ef4444',
+  },
+  modalButtonText: {
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  modalButtonTextDelete: {
+    color: '#ffffff',
   },
 })

@@ -1,6 +1,7 @@
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000
-const STUDY_DAY_START_HOUR = 0  // Changed from 3 to 0 (midnight)
-const STUDY_DAY_SHIFT_MS = 0  // No shifting needed for midnight cutoff
+const STUDY_DAY_START_HOUR = 0 // 0時区切り（JST）
+// UTCのDateをJSTの「学習日」に写像するためのシフト
+const STUDY_DAY_SHIFT_MS = JST_OFFSET_MS - STUDY_DAY_START_HOUR * 60 * 60 * 1000
 
 const formatYmdUTC = (date: Date) => {
   const year = date.getUTCFullYear()

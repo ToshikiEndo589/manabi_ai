@@ -73,16 +73,11 @@ export function OnboardingScreen() {
     try {
       await createProfile({
         username,
-        birth_date: birthDate.toISOString().split('T')[0],
+        birth_date: `${birthDate.getFullYear()}-${String(birthDate.getMonth() + 1).padStart(2, '0')}-${String(birthDate.getDate()).padStart(2, '0')}`,
         gender,
         study_purpose: purposes,
         weekday_target_minutes: Number(weekdayTarget),
         weekend_target_minutes: Number(weekendTarget),
-        // Legacy fields (hidden)
-        school_name: '',
-        current_deviation: 0,
-        target_deviation: 0,
-        exam_date: null,
       })
     } catch (error: any) {
       setError(error?.message ?? 'オンボーディングに失敗しました。')

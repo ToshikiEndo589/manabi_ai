@@ -10,8 +10,10 @@ import {
   Text,
   TextInput,
   View,
+  TouchableOpacity,
 } from 'react-native'
 import { useNavigation } from '@react-navigation/native'
+import { Feather } from '@expo/vector-icons'
 import { supabase } from '../lib/supabase'
 
 export function LoginScreen() {
@@ -19,6 +21,8 @@ export function LoginScreen() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -97,23 +101,47 @@ export function LoginScreen() {
             onChangeText={setEmail}
           />
           <Text style={styles.label}>パスワード</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="••••••••"
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-          />
+          <View style={styles.passwordContainer}>
+            <TextInput
+              style={styles.passwordInput}
+              placeholder="••••••••"
+              secureTextEntry={!showPassword}
+              value={password}
+              onChangeText={setPassword}
+            />
+            <TouchableOpacity
+              style={styles.eyeButton}
+              onPress={() => setShowPassword(!showPassword)}
+            >
+              <Feather
+                name={showPassword ? 'eye' : 'eye-off'}
+                size={20}
+                color="#64748b"
+              />
+            </TouchableOpacity>
+          </View>
           {mode === 'signup' && (
             <>
               <Text style={styles.label}>パスワード（確認）</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="••••••••"
-                secureTextEntry
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-              />
+              <View style={styles.passwordContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="••••••••"
+                  secureTextEntry={!showConfirmPassword}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                />
+                <TouchableOpacity
+                  style={styles.eyeButton}
+                  onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                >
+                  <Feather
+                    name={showConfirmPassword ? 'eye' : 'eye-off'}
+                    size={20}
+                    color="#64748b"
+                  />
+                </TouchableOpacity>
+              </View>
             </>
           )}
           <Pressable style={styles.primaryButton} onPress={handleSubmit} disabled={loading}>
@@ -144,7 +172,7 @@ export function LoginScreen() {
           </Pressable>
         </View>
       </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardAvoidingView >
   )
 }
 
@@ -200,6 +228,25 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginTop: 4,
     fontSize: 14,
+    backgroundColor: '#f8fafc',
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    marginTop: 4,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 10,
+    fontSize: 14,
+  },
+  eyeButton: {
+    padding: 8,
   },
   primaryButton: {
     backgroundColor: '#2563eb',

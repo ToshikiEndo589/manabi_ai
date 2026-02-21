@@ -1,0 +1,113 @@
+﻿node_modules/@expo/vector-icons/build/createIconSet.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/@expo/vector-icons/build/createIconSet.d.ts(25,18): error TS2320: Interface 'IconButtonProps<GLYPHS>' cannot simultaneously extend types 'IconProps<GLYPHS>' and 'TouchableHighlightProps'.
+  Named property 'pressRetentionOffset' of types 'IconProps<GLYPHS>' and 'TouchableHighlightProps' are not identical.
+node_modules/@react-navigation/core/lib/typescript/src/PreventRemoveProvider.d.ts(8,69): error TS2503: Cannot find namespace 'JSX'.
+node_modules/@react-navigation/core/lib/typescript/src/types.d.ts(293,15): error TS2503: Cannot find namespace 'JSX'.
+node_modules/@react-navigation/core/lib/typescript/src/useNavigationBuilder.d.ts(174,11): error TS2503: Cannot find namespace 'JSX'.
+node_modules/@react-navigation/native/lib/typescript/src/theming/ThemeProvider.d.ts(7,68): error TS2503: Cannot find namespace 'JSX'.
+node_modules/@types/node/module.d.ts(804,13): error TS2403: Subsequent variable declarations must have the same type.  Variable 'require' must be of type 'NodeRequire', but here has type 'Require'.
+node_modules/react-native-svg/lib/typescript/elements/filters/FeBlend.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeColorMatrix.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeComponentTransfer.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeComponentTransferFunction.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeComposite.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeDropShadow.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeFlood.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeGaussianBlur.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeMerge.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeMergeNode.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/FeOffset.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/elements/filters/Filter.d.ts(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native-svg/lib/typescript/lib/extract/types.d.ts(2,13): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+node_modules/react-native/src/types/globals.d.ts(10,1): error TS6200: Definitions of the following identifiers conflict with those in another file: EndingType, BlobPart, BufferSource, FormData, RequestInfo, XMLHttpRequestResponseType, AbortSignal, AbortController
+node_modules/react-native/src/types/globals.d.ts(166,7): error TS2403: Subsequent variable declarations must have the same type.  Variable 'Blob' must be of type '{ new (blobParts?: BlobPart[], options?: BlobPropertyBag): Blob; prototype: Blob; }', but here has type '{ new (blobParts?: (string | Blob)[], options?: BlobOptions): Blob; prototype: Blob; }'.
+node_modules/react-native/src/types/globals.d.ts(180,7): error TS2403: Subsequent variable declarations must have the same type.  Variable 'File' must be of type '{ new (fileBits: BlobPart[], fileName: string, options?: FilePropertyBag): File; prototype: File; }', but here has type '{ new (fileParts: BlobPart[], name: string, options?: FilePropertyBag): File; prototype: File; }'.
+node_modules/react-native/src/types/globals.d.ts(266,5): error TS2717: Subsequent property declarations must have the same type.  Property 'body' must be of type 'BodyInit', but here has type 'BodyInit_'.
+node_modules/react-native/src/types/globals.d.ts(275,5): error TS2717: Subsequent property declarations must have the same type.  Property 'signal' must be of type 'AbortSignal', but here has type 'AbortSignal'.
+node_modules/react-native/src/types/globals.d.ts(285,14): error TS2717: Subsequent property declarations must have the same type.  Property 'signal' must be of type 'AbortSignal', but here has type 'AbortSignal'.
+node_modules/react-native/src/types/globals.d.ts(289,7): error TS2403: Subsequent variable declarations must have the same type.  Variable 'Request' must be of type '{ new (input: RequestInfo | URL, init?: RequestInit): Request; prototype: Request; }', but here has type '{ new (input: string | Request, init?: RequestInit): Request; prototype: Request; }'.
+node_modules/react-native/src/types/globals.d.ts(313,7): error TS2403: Subsequent variable declarations must have the same type.  Variable 'Response' must be of type '{ new (body?: BodyInit, init?: ResponseInit): Response; prototype: Response; error(): Response; json(data: any, init?: ResponseInit): Response; redirect(url: string | URL, status?: number): Response; }', but here has type '{ new (body?: BodyInit_, init?: ResponseInit): Response; prototype: Response; error(): Response; json(data: any, init?: ResponseInit): Response; redirect: (url: string | URL, status?: number) => Response; }'.
+node_modules/react-native/src/types/globals.d.ts(398,5): error TS2717: Subsequent property declarations must have the same type.  Property 'abort' must be of type 'ProgressEvent<XMLHttpRequestEventTarget>', but here has type 'ProgressEvent<EventTarget>'.
+node_modules/react-native/src/types/globals.d.ts(399,5): error TS2717: Subsequent property declarations must have the same type.  Property 'error' must be of type 'ProgressEvent<XMLHttpRequestEventTarget>', but here has type 'ProgressEvent<EventTarget>'.
+node_modules/react-native/src/types/globals.d.ts(400,5): error TS2717: Subsequent property declarations must have the same type.  Property 'load' must be of type 'ProgressEvent<XMLHttpRequestEventTarget>', but here has type 'ProgressEvent<EventTarget>'.
+node_modules/react-native/src/types/globals.d.ts(401,5): error TS2717: Subsequent property declarations must have the same type.  Property 'loadend' must be of type 'ProgressEvent<XMLHttpRequestEventTarget>', but here has type 'ProgressEvent<EventTarget>'.
+node_modules/react-native/src/types/globals.d.ts(402,5): error TS2717: Subsequent property declarations must have the same type.  Property 'loadstart' must be of type 'ProgressEvent<XMLHttpRequestEventTarget>', but here has type 'ProgressEvent<EventTarget>'.
+node_modules/react-native/src/types/globals.d.ts(403,5): error TS2717: Subsequent property declarations must have the same type.  Property 'progress' must be of type 'ProgressEvent<XMLHttpRequestEventTarget>', but here has type 'ProgressEvent<EventTarget>'.
+node_modules/react-native/src/types/globals.d.ts(404,5): error TS2717: Subsequent property declarations must have the same type.  Property 'timeout' must be of type 'ProgressEvent<XMLHttpRequestEventTarget>', but here has type 'ProgressEvent<EventTarget>'.
+node_modules/react-native/src/types/globals.d.ts(471,7): error TS2403: Subsequent variable declarations must have the same type.  Variable 'URL' must be of type '{ new (url: string | URL, base?: string | URL): URL; prototype: URL; canParse(url: string | URL, base?: string | URL): boolean; createObjectURL(obj: Blob | MediaSource): string; parse(url: string | URL, base?: string | URL): URL; revokeObjectURL(url: string): void; }', but here has type '{ new (url: string | URL, base?: string | URL): URL; prototype: URL; createObjectURL(obj: Blob): string; revokeObjectURL(url: string): void; }'.
+node_modules/react-native/src/types/globals.d.ts(534,5): error TS2717: Subsequent property declarations must have the same type.  Property 'onopen' must be of type '(this: WebSocket, ev: Event) => any', but here has type '() => void'.
+node_modules/react-native/src/types/globals.d.ts(535,5): error TS2717: Subsequent property declarations must have the same type.  Property 'onmessage' must be of type '(this: WebSocket, ev: MessageEvent<any>) => any', but here has type '(event: WebSocketMessageEvent) => void'.
+node_modules/react-native/src/types/globals.d.ts(536,5): error TS2717: Subsequent property declarations must have the same type.  Property 'onerror' must be of type '(this: WebSocket, ev: Event) => any', but here has type '(event: WebSocketErrorEvent) => void'.
+node_modules/react-native/src/types/globals.d.ts(537,5): error TS2717: Subsequent property declarations must have the same type.  Property 'onclose' must be of type '(this: WebSocket, ev: CloseEvent) => any', but here has type '(event: WebSocketCloseEvent) => void'.
+node_modules/react-native/src/types/globals.d.ts(538,5): error TS2717: Subsequent property declarations must have the same type.  Property 'addEventListener' must be of type '{ <K extends keyof WebSocketEventMap>(type: K, listener: (this: WebSocket, ev: WebSocketEventMap[K]) => any, options?: boolean | AddEventListenerOptions): void; (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): void; }', but here has type 'WebsocketEventListener'.
+node_modules/react-native/src/types/globals.d.ts(539,5): error TS2717: Subsequent property declarations must have the same type.  Property 'removeEventListener' must be of type '{ <K extends keyof WebSocketEventMap>(type: K, listener: (this: WebSocket, ev: WebSocketEventMap[K]) => any, options?: boolean | EventListenerOptions): void; (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions): void; }', but here has type 'WebsocketEventListener'.
+node_modules/react-native/src/types/globals.d.ts(542,7): error TS2403: Subsequent variable declarations must have the same type.  Variable 'WebSocket' must be of type '{ new (url: string | URL, protocols?: string | string[]): WebSocket; prototype: WebSocket; readonly CONNECTING: 0; readonly OPEN: 1; readonly CLOSING: 2; readonly CLOSED: 3; }', but here has type '{ new (uri: string, protocols?: string | string[], options?: { [optionName: string]: any; headers: { [headerName: string]: string; }; }): WebSocket; prototype: WebSocket; readonly CLOSED: number; readonly CLOSING: number; readonly CONNECTING: number; readonly OPEN: number; }'.
+node_modules/react-native/src/types/globals.d.ts(627,14): error TS2717: Subsequent property declarations must have the same type.  Property 'error' must be of type 'DOMException', but here has type 'Error'.
+node_modules/react-native/src/types/globals.d.ts(640,14): error TS2717: Subsequent property declarations must have the same type.  Property 'readyState' must be of type '0 | 2 | 1', but here has type 'number'.
+node_modules/typescript/lib/lib.dom.d.ts(23,1): error TS6200: Definitions of the following identifiers conflict with those in another file: EndingType, BlobPart, BufferSource, FormData, RequestInfo, XMLHttpRequestResponseType, AbortSignal, AbortController
+node_modules/typescript/lib/lib.dom.d.ts(32640,11): error TS2430: Interface 'URL' incorrectly extends interface 'import("node:url").URL'.
+  The types returned by 'searchParams[Symbol.iterator]()' are incompatible between these types.
+    Property '[Symbol.dispose]' is missing in type 'IterableIterator<[string, string]>' but required in type 'URLSearchParamsIterator<[string, string]>'.
+node_modules/typescript/lib/lib.dom.d.ts(32759,11): error TS2430: Interface 'URLSearchParams' incorrectly extends interface 'import("node:url").URLSearchParams'.
+  The types returned by '[Symbol.iterator]()' are incompatible between these types.
+    Property '[Symbol.dispose]' is missing in type 'IterableIterator<[string, string]>' but required in type 'URLSearchParamsIterator<[string, string]>'.
+src/contexts/ProfileContext.tsx(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+src/screens/LogScreen.tsx(1,8): error TS1259: Module '"C:/Users/tsken/Downloads/AI-YOBIKOU-main (1)/AI-YOBIKOU-main/native/node_modules/@types/react/index"' can only be default-imported using the 'esModuleInterop' flag
+src/screens/LogScreen.tsx(727,23): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type '{ key: string; style: { flexBasis: "48%"; backgroundColor: string; borderRadius: number; paddingVertical: number; alignItems: "center"; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type '{ key: string; style: { flexBasis: "48%"; backgroundColor: string; borderRadius: number; paddingVertical: number; alignItems: "center"; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+src/screens/LogScreen.tsx(864,33): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type '{ key: string; style: ({ width: number; borderRadius: number; } | { height: number; backgroundColor: string; })[]; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type '{ key: string; style: ({ width: number; borderRadius: number; } | { height: number; backgroundColor: string; })[]; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+src/screens/LogScreen.tsx(882,27): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type '{ key: string; style: { flex: number; alignItems: "center"; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type '{ key: string; style: { flex: number; alignItems: "center"; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+src/screens/LogScreen.tsx(892,23): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type '{ key: string; style: { flexDirection: "row"; alignItems: "center"; gap: number; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type '{ key: string; style: { flexDirection: "row"; alignItems: "center"; gap: number; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+src/screens/LogScreen.tsx(908,23): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type '{ key: string; style: ({ fontSize: number; fontWeight: "600"; marginBottom: number; } | { color: string; })[]; }' is not assignable to type 'TextProps'.
+      Property 'key' does not exist on type 'TextProps'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type '{ key: string; style: ({ fontSize: number; fontWeight: "600"; marginBottom: number; } | { color: string; })[]; }' is not assignable to type 'TextProps'.
+      Property 'key' does not exist on type 'TextProps'.
+src/screens/LogScreen.tsx(995,29): error TS2322: Type '{ key: string; cx: string; cy: string; r: number; stroke: string; strokeWidth: number; strokeDasharray: string; strokeDashoffset: number; strokeLinecap: "round"; fill: string; }' is not assignable to type 'CircleProps | Readonly<CircleProps>'.
+  Property 'key' does not exist on type 'CircleProps | Readonly<CircleProps>'.
+src/screens/LogScreen.tsx(1016,23): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type '{ key: string; style: { flexDirection: "row"; justifyContent: "space-between"; alignItems: "center"; paddingVertical: number; borderBottomWidth: number; borderBottomColor: string; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type '{ key: string; style: { flexDirection: "row"; justifyContent: "space-between"; alignItems: "center"; paddingVertical: number; borderBottomWidth: number; borderBottomColor: string; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+src/screens/LogScreen.tsx(1142,27): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type '{ key: string; style: { borderWidth: number; borderColor: string; borderRadius: number; padding: number; marginBottom: number; flexDirection: "row"; justifyContent: "space-between"; gap: number; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type '{ key: string; style: { borderWidth: number; borderColor: string; borderRadius: number; padding: number; marginBottom: number; flexDirection: "row"; justifyContent: "space-between"; gap: number; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+src/screens/LogScreen.tsx(1173,25): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type '{ key: string; style: { borderWidth: number; borderColor: string; borderRadius: number; padding: number; marginBottom: number; flexDirection: "row"; justifyContent: "space-between"; gap: number; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type '{ key: string; style: { borderWidth: number; borderColor: string; borderRadius: number; padding: number; marginBottom: number; flexDirection: "row"; justifyContent: "space-between"; gap: number; }; }' is not assignable to type 'ViewProps'.
+      Property 'key' does not exist on type 'ViewProps'.

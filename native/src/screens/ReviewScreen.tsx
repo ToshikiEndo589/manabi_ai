@@ -14,6 +14,8 @@ import {
 import { supabase } from '../lib/supabase'
 import { useProfile } from '../contexts/ProfileContext'
 import type { ReviewTask } from '../types'
+import { calculateSM2, getNextDueDate } from '../lib/sm2'
+import type { SM2Rating } from '../lib/sm2'
 import { formatDateLabel, getStudyDay, getStudyDayDate, getTodayStart } from '../lib/date'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -22,7 +24,6 @@ import { Image } from 'react-native'
 import type { ReferenceBook } from '../types'
 
 const DEFAULT_DIFFICULTY = 'normal'
-const REVIEW_DAYS = [1, 3, 7, 15, 30, 60, 120, 240, 365, 730, 1095, 1460, 1825]
 
 type Difficulty = 'easy' | 'normal' | 'hard'
 
@@ -83,61 +84,122 @@ export function ReviewScreen() {
         return ''
     }, [])
 
-    useEffect(() => {
-        const loadTasks = async () => {
-            setLoading(true)
-            const { data, error } = await supabase
-                .from('review_tasks')
-                .select('id, due_at, status, study_log_id, study_logs(note, subject, started_at, reference_book_id)')
-                .eq('user_id', userId)
-                .eq('status', 'pending')
-                .lte('due_at', new Date().toISOString())
-                .order('due_at', { ascending: true })
-
-            if (!error) {
-                const normalized = ((data as any[]) || []).map((task) => ({
-                    ...task,
-                    study_logs: Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null,
-                }))
-                setReviewTasks(normalized as ReviewTask[])
-            }
-
-            // Load books here too so we have images immediately
-            const { data: booksData, error: booksError } = await supabase
-                .from('reference_books')
-                .select('*')
-                .eq('user_id', userId)
-                .is('deleted_at', null)
-                .order('created_at', { ascending: false })
-            if (!booksError) {
-                setReferenceBooks((booksData || []) as ReferenceBook[])
-            }
-
-            setLoading(false)
-        }
-        loadTasks()
-    }, [userId])
-
     const loadTasks = async () => {
         setLoading(true)
         const { data, error } = await supabase
             .from('review_tasks')
-            .select('id, due_at, status, study_log_id, study_logs(note, subject, started_at, reference_book_id)')
+            .select('id, due_at, status, study_log_id, review_material_id, study_logs(note, subject, started_at, reference_book_id), review_materials(content, subject, reference_book_id, created_at, sm2_interval, sm2_ease_factor, sm2_repetitions)')
             .eq('user_id', userId)
             .eq('status', 'pending')
             .lte('due_at', new Date().toISOString())
             .order('due_at', { ascending: true })
 
         if (!error) {
-            const normalized = ((data as any[]) || []).map((task) => ({
-                ...task,
-                study_logs: Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null,
-            }))
+            const normalized = ((data as any[]) || []).map((task) => {
+                const sl = Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null
+                const rm = Array.isArray(task.review_materials) ? task.review_materials[0] ?? null : task.review_materials ?? null
+
+                const effectiveLog = rm ? {
+                    note: rm.content,
+                    subject: rm.subject,
+                    reference_book_id: rm.reference_book_id,
+                    started_at: rm.created_at
+                } : sl
+
+                return {
+                    ...task,
+                    study_logs: effectiveLog,
+                    review_materials: rm,
+                }
+            })
             setReviewTasks(normalized as ReviewTask[])
         }
+
+        // 修復: マイグレーションで CASCADE 削除された復習タスクを復元（review_materials に紐づく pending タスクが無いものにスケジュールを再作成）
+        const repaired = await repairOrphanedReviewMaterials()
+        if (repaired) {
+            const { data: data2, error: error2 } = await supabase
+                .from('review_tasks')
+                .select('id, due_at, status, study_log_id, review_material_id, study_logs(note, subject, started_at, reference_book_id), review_materials(content, subject, reference_book_id, created_at, sm2_interval, sm2_ease_factor, sm2_repetitions)')
+                .eq('user_id', userId)
+                .eq('status', 'pending')
+                .lte('due_at', new Date().toISOString())
+                .order('due_at', { ascending: true })
+            if (!error2 && data2?.length) {
+                const normalized2 = (data2 as any[]).map((task) => {
+                    const sl = Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null
+                    const rm = Array.isArray(task.review_materials) ? task.review_materials[0] ?? null : task.review_materials ?? null
+                    const effectiveLog = rm ? { note: rm.content, subject: rm.subject, reference_book_id: rm.reference_book_id, started_at: rm.created_at } : sl
+                    return { ...task, study_logs: effectiveLog, review_materials: rm }
+                })
+                setReviewTasks(normalized2 as ReviewTask[])
+            }
+        }
+
+        // Load books here too so we have images immediately
+        const { data: booksData, error: booksError } = await supabase
+            .from('reference_books')
+            .select('*')
+            .eq('user_id', userId)
+            .is('deleted_at', null)
+            .order('created_at', { ascending: false })
+        if (!booksError) {
+            setReferenceBooks((booksData || []) as ReferenceBook[])
+        }
+
         setLoading(false)
     }
 
+    const repairOrphanedReviewMaterials = async (): Promise<boolean> => {
+        const { data: materials, error: matError } = await supabase
+            .from('review_materials')
+            .select('id, created_at, sm2_interval, sm2_ease_factor, sm2_repetitions')
+            .eq('user_id', userId)
+        if (matError || !materials?.length) return false
+
+        const { data: allPendingTasks } = await supabase
+            .from('review_tasks')
+            .select('review_material_id')
+            .eq('user_id', userId)
+            .eq('status', 'pending')
+        const materialIdsWithPending = new Set((allPendingTasks || []).map((t: { review_material_id: string | null }) => t.review_material_id).filter(Boolean))
+
+        let inserted = false
+
+        for (const mat of materials) {
+            if (materialIdsWithPending.has(mat.id)) continue
+            // SM-2: orphaned material gets a single task due tomorrow
+            const dueDate = getNextDueDate(1)
+            const { error } = await supabase.from('review_tasks').insert({
+                user_id: userId,
+                review_material_id: mat.id,
+                due_at: dueDate.toISOString(),
+                status: 'pending',
+            })
+            if (!error) inserted = true
+        }
+        return inserted
+    }
+
+    useEffect(() => {
+        loadTasks()
+    }, [userId])
+
+    // Temporary fix for the user to restore their disappeared cards from the bug
+    useEffect(() => {
+        if (!userId) return
+        const restoreBuggedTasks = async () => {
+            const { error } = await supabase.from('review_tasks')
+                .update({ status: 'pending' })
+                .eq('user_id', userId)
+                .eq('status', 'completed')
+            if (!error) {
+                // If anything was restored, it will be safely refetched when they use the app
+                loadTasks()
+            }
+        }
+        restoreBuggedTasks()
+    }, [userId])
     // Extracted loadBooks function for reusability
     const loadBooks = async () => {
         const { data, error } = await supabase
@@ -360,19 +422,62 @@ export function ReviewScreen() {
         setShowingAnswer((prev) => ({ ...prev, [key]: true }))
     }
 
-    const handleFlashcardComplete = async (taskId: string, theme: string) => {
+    /**
+     * SM-2: ユーザーの評価（完璧/うろ覚え/苦手）を受け取り、
+     * スケジュールを更新して次の復習タスクを1つ作成する
+     */
+    const handleSM2Rating = async (taskId: string, theme: string, rating: SM2Rating) => {
         const task = reviewTasks.find((t) => t.id === taskId)
-        const allThemes = splitThemes(task?.study_logs?.note || '')
+        if (!task) return
+
+        const rm = task.review_materials as any
+        const materialId = task.review_material_id
+
+        // SM-2 計算
+        const currentState = {
+            interval: rm?.sm2_interval ?? 0,
+            easeFactor: rm?.sm2_ease_factor ?? 2.5,
+            repetitions: rm?.sm2_repetitions ?? 0,
+        }
+        const result = calculateSM2(rating, currentState)
+        const nextDueDate = getNextDueDate(result.nextDueDays)
+
+        // review_materials の SM-2 状態を更新
+        if (materialId) {
+            await supabase.from('review_materials').update({
+                sm2_interval: result.interval,
+                sm2_ease_factor: result.easeFactor,
+                sm2_repetitions: result.repetitions,
+            }).eq('id', materialId)
+
+            // 既存の未来のpendingタスクを削除（古い固定スケジュールの残り）
+            await supabase.from('review_tasks')
+                .delete()
+                .eq('review_material_id', materialId)
+                .eq('status', 'pending')
+                .gt('due_at', new Date().toISOString())
+
+            // 次の復習タスクを1つ作成
+            await supabase.from('review_tasks').insert({
+                user_id: userId,
+                review_material_id: materialId,
+                due_at: nextDueDate.toISOString(),
+                status: 'pending',
+            })
+        }
+
+        // テーマを完了済みにしてUIから除外
+        const noteContent = task.review_materials?.content || task.study_logs?.note || ''
+        const allThemes = splitThemes(noteContent)
         const hidden = skippedThemes[taskId] || []
 
-        // Mark this theme as completed
         setSkippedThemes((prev) => ({
             ...prev,
             [taskId]: [...(prev[taskId] || []), theme]
         }))
 
-        const isComplete = allThemes.every((themeItem) => {
-            if (themeItem === theme) return true // Current theme is now complete
+        const isComplete = allThemes.length > 0 && allThemes.every((themeItem) => {
+            if (themeItem === theme) return true
             return hidden.includes(themeItem)
         })
 
@@ -382,86 +487,20 @@ export function ReviewScreen() {
         }
     }
 
-    const resetReviewSchedule = async (studyLogId: string) => {
-        // 1. Delete all future pending tasks for this study log
-        await supabase
-            .from('review_tasks')
-            .delete()
-            .eq('study_log_id', studyLogId)
-            .eq('status', 'pending')
-            .gt('due_at', new Date().toISOString())
 
-        // 2. Create new schedule starting from tomorrow
-        // Use logic similar to handleCreate but starting from NOW + 1 day
-        const now = new Date()
-        const baseYear = now.getFullYear()
-        const baseMonth = String(now.getMonth() + 1).padStart(2, '0')
-        const baseDay = String(now.getDate()).padStart(2, '0')
-        const baseDateStr = `${baseYear}-${baseMonth}-${baseDay}`
-        const baseStudyDayDate = getStudyDayDate(baseDateStr)
 
-        const tasks = REVIEW_DAYS.map((days) => {
-            const dueDate = new Date(baseStudyDayDate.getTime() + days * 24 * 60 * 60 * 1000 + 9 * 60 * 60 * 1000)
-            return {
-                user_id: userId,
-                study_log_id: studyLogId,
-                due_at: dueDate.toISOString(),
-                status: 'pending',
-            }
-        })
+    // Note: handleQuizComplete is deprecated in favor of inline logic in the render block
+    // which immediately shows SM2 rating buttons or a "continue" button without needing a "終了" step.
 
-        const { error: taskError } = await supabase.from('review_tasks').insert(tasks)
-        if (taskError) {
-            console.error('Failed to reset schedule:', taskError)
-        }
-    }
-
-    const handleQuizComplete = async (taskId: string, theme: string) => {
-        const task = reviewTasks.find((t) => t.id === taskId)
-        if (!task) return
-
-        const allThemes = splitThemes(task.study_logs?.note || '')
-        const hidden = [...(skippedThemes[taskId] || []), theme] // Include the one we just hid
-
-        setSkippedThemes((prev) => ({
-            ...prev,
-            [taskId]: [...(prev[taskId] || []), theme]
-        }))
-
-        // Check if the user answered incorrectly for this theme
-        const themeQuiz = quizByTask[taskId]?.themes?.[theme]
-        let isIncorrect = false
-        if (themeQuiz?.questions) {
-            // If any question was answered incorrectly, mark as incorrect
-            isIncorrect = themeQuiz.questions.some((q, idx) => {
-                const answer = themeQuiz.answers[idx]
-                return answer !== undefined && answer !== q.correct_index
-            })
-        }
-
-        // If incorrect, reset the schedule!
-        if (isIncorrect && task.study_log_id) {
-            Alert.alert('復習スケジュール変更', '間違えたため、この単元のスケジュールを「明日から」にリセットしました。')
-            await resetReviewSchedule(task.study_log_id)
-        }
-
-        const reallyComplete = allThemes.every(t => hidden.includes(t))
-
-        if (reallyComplete) {
-            await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', taskId)
-            setReviewTasks((prev) => prev.filter((t) => t.id !== taskId))
-        }
-    }
-
-    const handleGenerateQuiz = async (task: ReviewTask, theme?: string) => {
+    const handleGenerateQuiz = async (task: ReviewTask, theme?: string): Promise<boolean> => {
         if (!endpoint) {
             Alert.alert('設定エラー', 'APIエンドポイントが設定されていません。アプリを再起動してみてください。')
-            return
+            return false
         }
-        const noteValue = task.study_logs?.note?.trim()
+        const noteValue = (task.review_materials?.content || task.study_logs?.note || '').trim()
         if (!noteValue) {
             Alert.alert('データエラー', '学習内容（メモ）が記録されていないため、クイズを生成できません。')
-            return
+            return false
         }
         const themeValue = theme || noteValue
         const difficultyKey = getThemeKey(task.id, themeValue)
@@ -483,18 +522,33 @@ export function ReviewScreen() {
                 },
             }
         })
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 90000)
         try {
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ note: themeValue, count: 1, difficulty }),
+                signal: controller.signal,
             })
+            clearTimeout(timeoutId)
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}))
                 const errorMessage = errorData.details || errorData.error || 'クイズの生成に失敗しました'
                 throw new Error(errorMessage)
             }
             const data = await response.json()
+
+            // Calculate and log usage if provided by the API
+            if (data.usage) {
+                console.log('--- OpenAI API Usage (gpt-5-mini) ---')
+                console.log(`Input Tokens:  ${data.usage.inputTokens} ($${data.usage.inputCostUSD.toFixed(6)})`)
+                console.log(`Output Tokens: ${data.usage.outputTokens} ($${data.usage.outputCostUSD.toFixed(6)})`)
+                console.log(`Total Tokens:  ${data.usage.totalTokens}`)
+                console.log(`Total Cost:    $${data.usage.totalCostUSD.toFixed(6)} (約 ${data.usage.totalCostJPY.toFixed(4)} 円)`)
+                console.log('---------------------------------------')
+            }
+
             const questions = (data.questions || []).map((q: QuizQuestion) => {
                 const originalChoices = q.choices ? q.choices.map((c: any) => String(c)) : []
                 const correctIndex = Number(q.correct_index ?? 0)
@@ -536,17 +590,34 @@ export function ReviewScreen() {
                     },
                 }
             })
+            return true
         } catch (error) {
-            console.error('Quiz generation error:', error)
+            clearTimeout(timeoutId)
             setQuizByTask((prev) => {
                 const next = { ...prev }
-                delete next[task.id]
+                const current = next[task.id]?.themes
+                if (current?.[themeValue]) {
+                    next[task.id] = {
+                        themes: {
+                            ...current,
+                            [themeValue]: { ...current[themeValue], loading: false },
+                        },
+                    }
+                } else {
+                    delete next[task.id]
+                }
                 return next
             })
             const message = error instanceof Error ? error.message : 'クイズの生成に失敗しました。'
-            Alert.alert('生成エラー', message)
+            if ((error as Error)?.name === 'AbortError') {
+                Alert.alert('タイムアウト', 'クイズ生成が90秒でタイムアウトしました。通信環境を確認して再試行してください。')
+            } else {
+                Alert.alert('生成エラー', message)
+            }
+            return false
         }
     }
+
 
     const handleAnswer = async (taskId: string, theme: string, qIndex: number, choiceIndex: number) => {
         const quiz = quizByTask[taskId]
@@ -634,13 +705,11 @@ export function ReviewScreen() {
         const startedAtIso = new Date(studyDayDate.getTime() + 9 * 60 * 60 * 1000).toISOString()
 
         const { data, error } = await supabase
-            .from('study_logs')
+            .from('review_materials')
             .insert({
                 user_id: userId,
                 subject: subject,
-                study_minutes: 0,
-                started_at: startedAtIso,
-                note: noteValue,
+                content: noteValue,
                 reference_book_id: selectedBookId || null,
             })
             .select()
@@ -653,28 +722,17 @@ export function ReviewScreen() {
         }
 
         if (data?.id) {
-            // Use app's date logic for due dates
-            const baseYear = selectedDate.getFullYear()
-            const baseMonth = String(selectedDate.getMonth() + 1).padStart(2, '0')
-            const baseDay = String(selectedDate.getDate()).padStart(2, '0')
-            const baseDateStr = `${baseYear}-${baseMonth}-${baseDay}`
-            const baseStudyDayDate = getStudyDayDate(baseDateStr)
-
-            const tasks = REVIEW_DAYS.map((days) => {
-                // Add days to the base date and create timestamp
-                const dueDate = new Date(baseStudyDayDate.getTime() + days * 24 * 60 * 60 * 1000 + 9 * 60 * 60 * 1000)
-                return {
-                    user_id: userId,
-                    study_log_id: data.id,
-                    due_at: dueDate.toISOString(),
-                    status: 'pending',
-                }
+            // SM-2: 最初の復習は1日後のタスクを1つだけ作成
+            const dueDate = getNextDueDate(1)
+            const { error: taskError } = await supabase.from('review_tasks').insert({
+                user_id: userId,
+                review_material_id: data.id,
+                due_at: dueDate.toISOString(),
+                status: 'pending',
             })
-
-            const { error: taskError } = await supabase.from('review_tasks').insert(tasks)
             if (taskError) {
                 console.error(taskError)
-                Alert.alert('タスク作成エラー', '一部のタスク作成に失敗しました')
+                Alert.alert('タスク作成エラー', 'タスク作成に失敗しました')
             }
         }
 
@@ -691,11 +749,11 @@ export function ReviewScreen() {
     // DEBUG: Log tasks and groups
     useEffect(() => {
         if (reviewTasks.length > 0) {
-            console.log(`[ReviewScreen] Loaded ${reviewTasks.length} tasks`)
+            // console.log(`[ReviewScreen] Loaded ${reviewTasks.length} tasks`)
             reviewTasks.forEach(t => {
                 const noteLen = t.study_logs?.note?.length || 0
                 const bookId = t.study_logs?.reference_book_id
-                console.log(`- Task ${t.id}: Book=${bookId}, NoteLen=${noteLen}`)
+                // console.log(`- Task ${t.id}: Book=${bookId}, NoteLen=${noteLen}`)
             })
         }
     }, [reviewTasks])
@@ -770,9 +828,9 @@ export function ReviewScreen() {
     // DEBUG: Log groups
     useEffect(() => {
         if (groupedTasks.length > 0) {
-            console.log(`[ReviewScreen] Grouped into ${groupedTasks.length} groups`)
+            // console.log(`[ReviewScreen] Grouped into ${groupedTasks.length} groups`)
             groupedTasks.forEach(g => {
-                console.log(`- Group ${g.key}: ${g.title}, ${g.tasks.length} tasks`)
+                // console.log(`- Group ${g.key}: ${g.title}, ${g.tasks.length} tasks`)
             })
         }
     }, [groupedTasks])
@@ -863,6 +921,7 @@ export function ReviewScreen() {
                             </View>
                         ) : (
                             <View>
+
                                 {currentTasks.map((task) => {
                                     const quiz = quizByTask[task.id]
                                     let themes = splitThemes(task.study_logs?.note || '')
@@ -955,11 +1014,14 @@ export function ReviewScreen() {
                                                                         </Pressable>
                                                                     ) : (
                                                                         <View style={styles.flashcardActions}>
-                                                                            <Pressable style={[styles.outlineButton, styles.completeButton]} onPress={() => handleFlashcardComplete(task.id, theme)}>
-                                                                                <Text style={[styles.outlineButtonText, styles.completeButtonText]}>覚えた ✓</Text>
+                                                                            <Pressable style={[styles.outlineButton, styles.perfectButton]} onPress={() => handleSM2Rating(task.id, theme, 'perfect')}>
+                                                                                <Text style={[styles.outlineButtonText, styles.perfectButtonText]}>完璧 ⭐</Text>
                                                                             </Pressable>
-                                                                            <Pressable style={styles.outlineButton} onPress={() => handleSkipTheme(task.id, theme, visibleThemes)}>
-                                                                                <Text style={styles.outlineButtonText}>まだ ✗</Text>
+                                                                            <Pressable style={[styles.outlineButton, styles.goodButton]} onPress={() => handleSM2Rating(task.id, theme, 'good')}>
+                                                                                <Text style={[styles.outlineButtonText, styles.goodButtonText]}>うろ覚え 🤔</Text>
+                                                                            </Pressable>
+                                                                            <Pressable style={[styles.outlineButton, styles.hardButton]} onPress={() => handleSM2Rating(task.id, theme, 'hard')}>
+                                                                                <Text style={[styles.outlineButtonText, styles.hardButtonText]}>苦手 😓</Text>
                                                                             </Pressable>
                                                                         </View>
                                                                     )}
@@ -1001,12 +1063,43 @@ export function ReviewScreen() {
                                                                                             {q.explanation}
                                                                                         </Text>
                                                                                     )}
-                                                                                    <Pressable
-                                                                                        style={[styles.outlineButton, styles.completeButton, { marginTop: 12 }]}
-                                                                                        onPress={() => handleQuizComplete(task.id, theme)}
-                                                                                    >
-                                                                                        <Text style={[styles.outlineButtonText, styles.completeButtonText]}>終了</Text>
-                                                                                    </Pressable>
+                                                                                    {(() => {
+                                                                                        const isAllAnswered = themeQuiz.questions.every((_, i) => themeQuiz.answers[i] !== undefined)
+                                                                                        if (!isAllAnswered) return null
+
+                                                                                        const isIncorrect = themeQuiz.questions.some((quizQ, idx) => {
+                                                                                            const ans = themeQuiz.answers[idx]
+                                                                                            return ans !== undefined && ans !== quizQ.correct_index
+                                                                                        })
+
+                                                                                        if (isIncorrect) {
+                                                                                            return (
+                                                                                                <Pressable
+                                                                                                    style={[styles.outlineButton, styles.hardButton, { marginTop: 12 }]}
+                                                                                                    onPress={() => handleSM2Rating(task.id, theme, 'hard')}
+                                                                                                >
+                                                                                                    <Text style={[styles.outlineButtonText, styles.hardButtonText]}>次へ（不正解のため明日に再復習）</Text>
+                                                                                                </Pressable>
+                                                                                            )
+                                                                                        } else {
+                                                                                            return (
+                                                                                                <View style={[styles.flashcardActions, { marginTop: 12 }]}>
+                                                                                                    <Pressable
+                                                                                                        style={[styles.outlineButton, styles.perfectButton, { flex: 1 }]}
+                                                                                                        onPress={() => handleSM2Rating(task.id, theme, 'perfect')}
+                                                                                                    >
+                                                                                                        <Text style={[styles.outlineButtonText, styles.perfectButtonText]}>完璧 ⭐</Text>
+                                                                                                    </Pressable>
+                                                                                                    <Pressable
+                                                                                                        style={[styles.outlineButton, styles.goodButton, { flex: 1 }]}
+                                                                                                        onPress={() => handleSM2Rating(task.id, theme, 'good')}
+                                                                                                    >
+                                                                                                        <Text style={[styles.outlineButtonText, styles.goodButtonText]}>うろ覚え 🤔</Text>
+                                                                                                    </Pressable>
+                                                                                                </View>
+                                                                                            )
+                                                                                        }
+                                                                                    })()}
                                                                                 </View>
                                                                             )}
                                                                         </View>
@@ -1359,6 +1452,7 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         fontSize: 12,
     },
+
     taskCard: {
         marginTop: 12,
         gap: 12,
@@ -1968,5 +2062,33 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#f8fafc',
+    },
+    // SM-2 rating buttons
+    perfectButton: {
+        backgroundColor: '#dcfce7',
+        borderColor: '#22c55e',
+        flex: 1,
+    },
+    perfectButtonText: {
+        color: '#15803d',
+        fontWeight: '700',
+    },
+    goodButton: {
+        backgroundColor: '#fef9c3',
+        borderColor: '#eab308',
+        flex: 1,
+    },
+    goodButtonText: {
+        color: '#a16207',
+        fontWeight: '700',
+    },
+    hardButton: {
+        backgroundColor: '#fee2e2',
+        borderColor: '#ef4444',
+        flex: 1,
+    },
+    hardButtonText: {
+        color: '#b91c1c',
+        fontWeight: '700',
     },
 })

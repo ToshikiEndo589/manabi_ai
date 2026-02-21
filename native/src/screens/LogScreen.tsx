@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   KeyboardAvoidingView,
@@ -24,7 +24,7 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { useProfile } from '../contexts/ProfileContext'
-import type { Profile, ReferenceBook, StudyLog } from '../types'
+import type { Profile, ReferenceBook, StudyLog, ReviewMaterial } from '../types'
 import { formatMinutes } from '../lib/format'
 import {
   formatDateInput,
@@ -94,10 +94,10 @@ export function LogScreen() {
   const [editMinutes, setEditMinutes] = useState('')
   const [editDate, setEditDate] = useState(new Date())
   const [showEditDatePicker, setShowEditDatePicker] = useState(false)
-  const [showEditNotes, setShowEditNotes] = useState(false)
+  const [showEditNotes, setShowEditNotes] = useState(false) // Keeping this as false if it's still ref'd somewhere else safely
   const [editingNoteLogIds, setEditingNoteLogIds] = useState<string[]>([])
   const [editNote, setEditNote] = useState('')
-  const [showPastGoals, setShowPastGoals] = useState(false)
+
   const [materialRangeType, setMaterialRangeType] = useState<'day' | 'week' | 'month' | 'total'>('day')
   const [dayOffset, setDayOffset] = useState(0)
   const [weekOffset, setWeekOffset] = useState(1)
@@ -117,19 +117,34 @@ export function LogScreen() {
   } | null>(null)
   const [showAllMemoLogs, setShowAllMemoLogs] = useState(false)
 
+  // 復習カードの修正
+  const [reviewMaterials, setReviewMaterials] = useState<ReviewMaterial[]>([])
+  const [showReviewCardsEdit, setShowReviewCardsEdit] = useState(false)
+  const [editingReviewCardId, setEditingReviewCardId] = useState<string | null>(null)
+  const [editCardSubject, setEditCardSubject] = useState('')
+  const [editCardContent, setEditCardContent] = useState('')
+  const [editCardBookId, setEditCardBookId] = useState<string | null>(null)
+  const [showReviewCardBookPicker, setShowReviewCardBookPicker] = useState(false)
+  const [savingReviewCard, setSavingReviewCard] = useState(false)
+
   const normalizePickerDate = (date: Date) => {
-    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0)
+    // Reset to midnight local time to avoid confusion
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0)
   }
 
   const buildStartedAtFromDisplayedDate = (date: Date) => {
-    // Simple: use the selected date at noon UTC
-    const [year, month, day] = formatDateInput(date).split('-').map(Number)
-    return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0))
+    // ユーザーが選んだ「カレンダー日」をそのまま保存するため、ローカルの年月日を使う
+    // 00:00 UTC だとタイムゾーンによって表示が前後するため、12:00 UTC で保存する
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const isoString = `${year}-${month}-${day}T12:00:00.000Z`
+    return new Date(isoString)
   }
 
   const loadData = async () => {
     setLoading(true)
-    const [logsResult, booksResult, profileResult] = await Promise.all([
+    const [logsResult, booksResult, profileResult, materialsResult] = await Promise.all([
       supabase
         .from('study_logs')
         .select('*')
@@ -146,6 +161,11 @@ export function LogScreen() {
         .select('*')
         .eq('user_id', userId)
         .single(),
+      supabase
+        .from('review_materials')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false }),
     ])
     if (logsResult.error) {
       Alert.alert('読み込みエラー', logsResult.error.message)
@@ -156,6 +176,9 @@ export function LogScreen() {
       Alert.alert('読み込みエラー', booksResult.error.message)
     } else {
       setReferenceBooks((booksResult.data || []) as ReferenceBook[])
+    }
+    if (!materialsResult.error && materialsResult.data) {
+      setReviewMaterials((materialsResult.data || []) as ReviewMaterial[])
     }
     if (!profileResult.error && profileResult.data) {
       setProfile(profileResult.data as Profile)
@@ -182,6 +205,7 @@ export function LogScreen() {
     }
     setLoading(false)
   }
+
 
   useEffect(() => {
     loadData()
@@ -284,35 +308,7 @@ export function LogScreen() {
 
 
 
-  const deleteGroup = async (group: typeof groupedEditLogs[0]) => {
-    Alert.alert(
-      '削除確認',
-      `${group.studyDay}の${group.subject}の記録を削除しますか？`,
-      [
-        { text: 'キャンセル', style: 'cancel' },
-        {
-          text: '削除',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const { error } = await supabase
-                .from('study_logs')
-                .delete()
-                .in('id', group.ids)
 
-              if (error) throw error
-
-              await loadData()
-              Alert.alert('削除完了', '学習記録を削除しました。')
-            } catch (err) {
-              console.error('Delete error:', err)
-              Alert.alert('エラー', '削除に失敗しました。')
-            }
-          }
-        }
-      ]
-    )
-  }
 
   const handleManualSubmit = async () => {
     if (!manualBookId) {
@@ -350,6 +346,7 @@ export function LogScreen() {
       })
       .select()
       .single()
+
     if (error) {
       Alert.alert('保存エラー', error.message)
       return
@@ -409,12 +406,12 @@ export function LogScreen() {
         reference_book_id: string | null
         started_at: string
         study_minutes: number
-        note: string | null
         studyDay: string
       }
     >()
     studyLogs.forEach((log) => {
       const studyDay = getStudyDay(new Date(log.started_at))
+
       const keyBase = log.reference_book_id ? `book:${log.reference_book_id}` : `subject:${log.subject}`
       const key = `${studyDay}::${keyBase}`
       const existing = groups.get(key)
@@ -425,18 +422,14 @@ export function LogScreen() {
           reference_book_id: log.reference_book_id || null,
           started_at: log.started_at,
           study_minutes: log.study_minutes,
-          note: log.note || null,
           studyDay,
         })
       } else {
         existing.ids.push(log.id)
         existing.study_minutes += log.study_minutes
-        if (log.note && log.note.trim()) {
-          existing.note = existing.note ? `${existing.note}\n\n${log.note.trim()}` : log.note.trim()
-        }
       }
     })
-    return Array.from(groups.values())
+    return Array.from(groups.values()).filter((g) => g.study_minutes > 0)
   }, [studyLogs])
 
   const startEditGroup = (group: (typeof groupedEditLogs)[number]) => {
@@ -455,6 +448,11 @@ export function LogScreen() {
     setEditSubject('')
     setEditMinutes('')
     setEditDate(new Date())
+  }
+
+  const deleteLogs = async (ids: string[]) => {
+    const { error: deleteError } = await supabase.from('study_logs').delete().in('id', ids)
+    if (deleteError) console.error('Error deleting logs:', deleteError)
   }
 
   const saveEditLog = async () => {
@@ -484,44 +482,94 @@ export function LogScreen() {
     }
     if (editingLogIds.length > 1) {
       const idsToDelete = editingLogIds.filter((id) => id !== targetId)
-      await supabase.from('study_logs').delete().in('id', idsToDelete)
+      await deleteLogs(idsToDelete)
     }
     cancelEditLog()
     await loadData()
   }
 
-  const deleteLogGroup = async (ids: string[]) => {
-    await supabase.from('study_logs').delete().in('id', ids)
-    await loadData()
+  const deleteGroup = async (group: typeof groupedEditLogs[0]) => {
+    Alert.alert(
+      '削除確認',
+      `${group.studyDay}の${group.subject}の記録を削除しますか？`,
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '削除',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteLogs(group.ids)
+              await loadData()
+              Alert.alert('削除完了', '学習記録を削除しました。')
+            } catch (err) {
+              console.error('Delete error:', err)
+              Alert.alert('エラー', '削除に失敗しました。')
+            }
+          },
+        },
+      ]
+    )
   }
 
-  const startEditNote = (group: (typeof groupedEditLogs)[number]) => {
-    setEditingNoteLogIds(group.ids)
-    setEditNote(group.note || '')
+  const openReviewCardEdit = (material: ReviewMaterial) => {
+    setEditingReviewCardId(material.id)
+    setEditCardBookId(material.reference_book_id || null)
+    setEditCardSubject(material.subject)
+    setEditCardContent(material.content)
+    setShowReviewCardBookPicker(false)
   }
 
-  const cancelEditNote = () => {
-    setEditingNoteLogIds([])
-    setEditNote('')
+  const cancelReviewCardEdit = () => {
+    setEditingReviewCardId(null)
+    setEditCardSubject('')
+    setEditCardContent('')
+    setEditCardBookId(null)
   }
 
-  const saveEditNote = async () => {
-    if (editingNoteLogIds.length === 0) return
-
-    // Update all logs in the group with the new note
+  const saveReviewCardEdit = async () => {
+    if (!editingReviewCardId || !editCardContent.trim()) return
+    const book = referenceBooks.find((b) => b.id === editCardBookId)
+    const finalSubject = book ? book.name : (editCardSubject.trim() || 'その他')
+    setSavingReviewCard(true)
     const { error } = await supabase
-      .from('study_logs')
-      .update({ note: editNote.trim() || null })
-      .in('id', editingNoteLogIds)
-
+      .from('review_materials')
+      .update({
+        reference_book_id: editCardBookId || null,
+        subject: finalSubject,
+        content: editCardContent.trim(),
+      })
+      .eq('id', editingReviewCardId)
+    setSavingReviewCard(false)
     if (error) {
       Alert.alert('更新エラー', error.message)
-      return
+    } else {
+      cancelReviewCardEdit()
+      await loadData()
+      Alert.alert('完了', '復習カードを更新しました。')
     }
+  }
 
-    cancelEditNote()
-    await loadData()
-    Alert.alert('保存完了', '復習カードを更新しました。')
+  const deleteReviewCard = (material: ReviewMaterial) => {
+    Alert.alert(
+      '削除確認',
+      'この復習カードを削除しますか？紐づく復習スケジュールも削除されます。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '削除',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.from('review_materials').delete().eq('id', material.id)
+            if (error) Alert.alert('エラー', '削除に失敗しました')
+            else {
+              setReviewMaterials((prev) => prev.filter((m) => m.id !== material.id))
+              await loadData()
+            }
+          },
+        },
+      ]
+    )
   }
 
   const buildShareText = () => {
@@ -548,50 +596,7 @@ export function LogScreen() {
     }
   }
 
-  const getDailyTargetForDate = (date: Date) => {
-    if (!profile) return 60
-    const day = date.getDay()
-    const isWeekend = day === 0 || day === 6
-    const defaultTarget = isWeekend
-      ? profile.weekend_target_minutes ?? 120
-      : profile.weekday_target_minutes ?? 60
-    const dateString = formatDateInput(date)
-    if (profile.today_target_date === dateString && profile.today_target_minutes) {
-      return profile.today_target_minutes
-    }
-    return defaultTarget
-  }
 
-  const getWeekTarget = (weekStart: Date) => {
-    if (!profile) return 420
-    const weekStartDateString = formatDateInput(weekStart)
-    if (profile.week_target_date === weekStartDateString && profile.week_target_minutes) {
-      return profile.week_target_minutes
-    }
-    let total = 0
-    const cursor = new Date(weekStart)
-    for (let i = 0; i < 7; i++) {
-      total += getDailyTargetForDate(cursor)
-      cursor.setDate(cursor.getDate() + 1)
-    }
-    return total
-  }
-
-  const getMonthTarget = (monthStart: Date) => {
-    if (!profile) return 1800
-    const monthStartDateString = formatDateInput(monthStart)
-    if (profile.month_target_date === monthStartDateString && profile.month_target_minutes) {
-      return profile.month_target_minutes
-    }
-    let total = 0
-    const cursor = new Date(monthStart)
-    const end = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1)
-    while (cursor < end) {
-      total += getDailyTargetForDate(cursor)
-      cursor.setDate(cursor.getDate() + 1)
-    }
-    return total
-  }
 
   const logsRangeTotals = useMemo(() => {
     const range =
@@ -888,11 +893,21 @@ export function LogScreen() {
           </View>
           <View style={styles.chartArea}>
             <View style={styles.chartRow}>
-              <View style={styles.yAxis}>
-                <Text style={styles.yAxisTitle}>時間</Text>
-                <Text style={styles.yAxisLabel}>{formatMinutes(maxChartMinutes)}</Text>
-                <Text style={styles.yAxisLabel}>{formatMinutes(Math.round(maxChartMinutes / 2))}</Text>
-                <Text style={styles.yAxisLabel}>0</Text>
+              <View style={{ width: 44, paddingBottom: 0 }}>
+                <View style={{ minHeight: 130, justifyContent: 'flex-end' }}>
+                  <Text style={[styles.yAxisTitle, { position: 'absolute', top: -5, left: 0 }]}>時間</Text>
+                  <View style={{ height: 120, justifyContent: 'space-between' }}>
+                    <Text style={[styles.yAxisLabel, { transform: [{ translateY: -6 }] }]}>{formatMinutes(maxChartMinutes)}</Text>
+                    <Text style={[styles.yAxisLabel, { transform: [{ translateY: 0 }] }]}>{formatMinutes(Math.round(maxChartMinutes / 2))}</Text>
+                    <Text style={[styles.yAxisLabel, { transform: [{ translateY: 6 }] }]}>0</Text>
+                  </View>
+                </View>
+                <View style={[styles.chartLabels, { opacity: 0 }]}>
+                  <View style={styles.chartLabelContainer}>
+                    <Text style={styles.chartLabel}>X</Text>
+                    <Text style={styles.chartWeekday}>X</Text>
+                  </View>
+                </View>
               </View>
               <View style={styles.chartBody}>
                 <View style={styles.chartBars}>
@@ -1295,7 +1310,7 @@ export function LogScreen() {
                           <Pressable style={styles.outlineButton} onPress={cancelEditLog}>
                             <Text style={styles.outlineButtonText}>キャンセル</Text>
                           </Pressable>
-                          <Pressable style={styles.deleteButton} onPress={() => deleteLogGroup(group.ids)}>
+                          <Pressable style={styles.deleteButton} onPress={() => deleteLogs(group.ids)}>
                             <Text style={styles.deleteText}>削除</Text>
                           </Pressable>
                         </View>
@@ -1328,144 +1343,49 @@ export function LogScreen() {
           )}
         </View>
 
+        {/* 復習カードの修正（学習記録の修正の下） */}
         <View style={styles.card}>
           <View style={styles.headerRow}>
             <View>
               <Text style={styles.sectionTitle}>復習カードの修正</Text>
-              <Text style={styles.sectionSubtitle}>復習カードの内容を編集できます</Text>
+              <Text style={styles.sectionSubtitle}>過去の復習カードを一覧で編集・削除できます</Text>
             </View>
-            <Pressable style={styles.plusButton} onPress={() => setShowEditNotes((prev) => !prev)}>
-              <Ionicons name={showEditNotes ? 'remove' : 'add'} size={18} color="#334155" />
+            <Pressable style={styles.plusButton} onPress={() => setShowReviewCardsEdit((prev) => !prev)}>
+              <Ionicons name={showReviewCardsEdit ? 'remove' : 'add'} size={18} color="#334155" />
             </Pressable>
           </View>
-          {showEditNotes && (
+          {showReviewCardsEdit && (
             <>
-              {groupedEditLogs.filter(g => g.note).length === 0 && <Text style={styles.mutedText}>復習カードがありません</Text>}
-              <ScrollView style={{ maxHeight: 600 }} nestedScrollEnabled>
-                {groupedEditLogs.filter(g => g.note).slice(0, 6).map((group) => {
-                  const isEditing = editingNoteLogIds.some(id => group.ids.includes(id))
-                  return (
-                    <View key={`${group.studyDay}-${group.subject}-${group.reference_book_id || 'none'}-note`} style={styles.logItem}>
-                      {isEditing ? (
-                        <View>
-                          <Text style={styles.mutedText}>{group.studyDay}</Text>
-                          <Text style={styles.logTitle}>
-                            {group.subject} / {formatMinutes(group.study_minutes)}
-                          </Text>
-                          <Text style={styles.label}>復習カード内容</Text>
-                          <TextInput
-                            style={[styles.input, { minHeight: 120, textAlignVertical: 'top', backgroundColor: '#f8fafc', padding: 12 }]}
-                            value={editNote}
-                            onChangeText={setEditNote}
-                            multiline
-                            autoFocus
-                            placeholder="復習カードの内容を入力..."
-                          />
-                          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                            <Pressable style={styles.primaryButton} onPress={saveEditNote}>
-                              <Text style={styles.primaryButtonText}>保存</Text>
-                            </Pressable>
-                            <Pressable style={styles.outlineButton} onPress={cancelEditNote}>
-                              <Text style={styles.outlineButtonText}>キャンセル</Text>
-                            </Pressable>
-                          </View>
+              {reviewMaterials.length === 0 ? (
+                <View style={styles.reviewCardsEmpty}>
+                  <Ionicons name="document-text-outline" size={40} color="#cbd5e1" />
+                  <Text style={styles.mutedText}>復習カードがありません</Text>
+                </View>
+              ) : (
+                <ScrollView style={styles.reviewCardsScroll} nestedScrollEnabled>
+                  {reviewMaterials.map((material) => (
+                    <View key={material.id} style={styles.reviewCardItem}>
+                      <View style={styles.reviewCardItemHeader}>
+                        <Text style={styles.reviewCardSubject} numberOfLines={1}>{material.subject}</Text>
+                        <View style={styles.reviewCardActions}>
+                          <Pressable onPress={() => openReviewCardEdit(material)} style={styles.reviewCardActionBtn}>
+                            <Ionicons name="pencil" size={18} color="#2563eb" />
+                            <Text style={styles.reviewCardActionText}>編集</Text>
+                          </Pressable>
+                          <Pressable onPress={() => deleteReviewCard(material)} style={[styles.reviewCardActionBtn, styles.reviewCardActionDelete]}>
+                            <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                            <Text style={[styles.reviewCardActionText, { color: '#dc2626' }]}>削除</Text>
+                          </Pressable>
                         </View>
-                      ) : (
-                        <View>
-                          <Text style={styles.mutedText}>{group.studyDay}</Text>
-                          <Text style={styles.logTitle}>
-                            {group.subject} / {formatMinutes(group.study_minutes)}
-                          </Text>
-                          {group.note && <Text style={styles.noteText}>{group.note}</Text>}
-                          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                            <Pressable style={styles.outlineButton} onPress={() => startEditNote(group)}>
-                              <Text style={styles.outlineButtonText}>編集</Text>
-                            </Pressable>
-                          </View>
-                        </View>
-                      )}
+                      </View>
+                      <Text style={styles.reviewCardContent} numberOfLines={3}>{material.content}</Text>
                     </View>
-                  )
-                })}
-              </ScrollView>
+                  ))}
+                </ScrollView>
+              )}
             </>
           )}
         </View>
-
-        {profile && (
-          <View style={styles.card}>
-            <View style={styles.headerRow}>
-              <View>
-                <Text style={styles.sectionTitle}>過去の目標達成状況</Text>
-                <Text style={styles.sectionSubtitle}>過去の日・週・月の目標達成状況を確認</Text>
-              </View>
-              <Pressable style={styles.plusButton} onPress={() => setShowPastGoals((prev) => !prev)}>
-                <Ionicons name={showPastGoals ? 'remove' : 'add'} size={18} color="#334155" />
-              </Pressable>
-            </View>
-            {showPastGoals && (
-              <>
-                {[1, 2, 3, 4, 5].map((i) => {
-                  const date = new Date()
-                  date.setDate(date.getDate() - i)
-                  const target = getDailyTargetForDate(date)
-                  const dayStart = new Date(date)
-                  dayStart.setHours(3, 0, 0, 0)
-                  const dayEnd = new Date(dayStart)
-                  dayEnd.setDate(dayEnd.getDate() + 1)
-                  const actual = getMinutesInRange(dayStart, dayEnd)
-                  const progress = Math.min(100, Math.round((actual / Math.max(1, target)) * 100))
-                  return (
-                    <View key={`past-day-${i}`} style={styles.goalItem}>
-                      <Text style={styles.mutedText}>{date.toLocaleDateString('ja-JP')}</Text>
-                      <Text style={styles.goalText}>
-                        {formatMinutes(actual)} / {formatMinutes(target)}（達成率 {progress}%）
-                      </Text>
-                      <ProgressBar progress={progress} />
-                    </View>
-                  )
-                })}
-                {[1, 2, 3].map((i) => {
-                  const weekStart = getThisWeekStart()
-                  weekStart.setDate(weekStart.getDate() - 7 * i)
-                  const weekEnd = new Date(weekStart)
-                  weekEnd.setDate(weekEnd.getDate() + 7)
-                  const target = getWeekTarget(weekStart)
-                  const actual = getMinutesInRange(weekStart, weekEnd)
-                  const progress = Math.min(100, Math.round((actual / Math.max(1, target)) * 100))
-                  return (
-                    <View key={`past-week-${i}`} style={styles.goalItem}>
-                      <Text style={styles.mutedText}>{formatDateLabel(weekStart)} 週</Text>
-                      <Text style={styles.goalText}>
-                        {formatMinutes(actual)} / {formatMinutes(target)}（達成率 {progress}%）
-                      </Text>
-                      <ProgressBar progress={progress} />
-                    </View>
-                  )
-                })}
-                {[1, 2, 3].map((i) => {
-                  const monthStart = getThisMonthStart()
-                  monthStart.setMonth(monthStart.getMonth() - i)
-                  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1)
-                  const target = getMonthTarget(monthStart)
-                  const actual = getMinutesInRange(monthStart, monthEnd)
-                  const progress = Math.min(100, Math.round((actual / Math.max(1, target)) * 100))
-                  return (
-                    <View key={`past-month-${i}`} style={styles.goalItem}>
-                      <Text style={styles.mutedText}>
-                        {monthStart.getFullYear()}年{monthStart.getMonth() + 1}月
-                      </Text>
-                      <Text style={styles.goalText}>
-                        {formatMinutes(actual)} / {formatMinutes(target)}（達成率 {progress}%）
-                      </Text>
-                      <ProgressBar progress={progress} />
-                    </View>
-                  )
-                })}
-              </>
-            )}
-          </View>
-        )}
 
         {/* --- Home Screen Features (Merged) --- */}
         <View style={styles.divider} />
@@ -1649,6 +1569,78 @@ export function LogScreen() {
         })()}
 
       </ScrollView>
+
+      {/* 復習カード編集モーダル */}
+      <Modal
+        visible={editingReviewCardId !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={cancelReviewCardEdit}
+      >
+        <KeyboardAvoidingView style={styles.reviewCardModalContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.reviewCardModalHeader}>
+            <Text style={styles.reviewCardModalTitle}>復習カードを編集</Text>
+            <Pressable onPress={cancelReviewCardEdit} hitSlop={12}>
+              <Text style={styles.reviewCardModalCancel}>キャンセル</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={styles.reviewCardModalBody} keyboardShouldPersistTaps="handled">
+            <Text style={styles.label}>教材・科目</Text>
+            <Pressable
+              style={styles.selectTrigger}
+              onPress={() => setShowReviewCardBookPicker((prev) => !prev)}
+            >
+              <Text style={styles.selectTriggerText}>
+                {editCardBookId ? referenceBooks.find((b) => b.id === editCardBookId)?.name : '教材を選択（任意）'}
+              </Text>
+              <Ionicons name={showReviewCardBookPicker ? 'chevron-up' : 'chevron-down'} size={20} color="#64748b" />
+            </Pressable>
+            {showReviewCardBookPicker && (
+              <View style={styles.inlineDropdown}>
+                <Pressable
+                  style={styles.dropdownItem}
+                  onPress={() => { setEditCardBookId(null); setShowReviewCardBookPicker(false) }}
+                >
+                  <Text style={[styles.dropdownItemText, editCardBookId === null && styles.dropdownItemTextSelected]}>教材なし（科目を手入力）</Text>
+                </Pressable>
+                {referenceBooks.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    style={styles.dropdownItem}
+                    onPress={() => { setEditCardBookId(item.id || null); setShowReviewCardBookPicker(false) }}
+                  >
+                    <Text style={[styles.dropdownItemText, editCardBookId === (item.id || null) && styles.dropdownItemTextSelected]}>{item.name}</Text>
+                    {editCardBookId === (item.id || null) && <Ionicons name="checkmark" size={20} color="#2563eb" />}
+                  </Pressable>
+                ))}
+              </View>
+            )}
+            {!editCardBookId && (
+              <>
+                <Text style={styles.label}>科目名（自由入力）</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="例: 英語、数学"
+                  value={editCardSubject}
+                  onChangeText={setEditCardSubject}
+                />
+              </>
+            )}
+            <Text style={[styles.label, { marginTop: 12 }]}>内容・メモ</Text>
+            <TextInput
+              style={[styles.input, styles.reviewCardContentInput]}
+              placeholder="復習したい内容を入力"
+              value={editCardContent}
+              onChangeText={setEditCardContent}
+              multiline
+              textAlignVertical="top"
+            />
+            <Pressable style={styles.primaryButton} onPress={saveReviewCardEdit} disabled={savingReviewCard || !editCardContent.trim()}>
+              <Text style={styles.primaryButtonText}>{savingReviewCard ? '保存中...' : '保存'}</Text>
+            </Pressable>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
     </KeyboardAvoidingView>
   )
 }
@@ -2472,5 +2464,91 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#2563eb',
+  },
+  // 復習カードの修正
+  reviewCardsEmpty: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    gap: 8,
+  },
+  reviewCardsScroll: {
+    maxHeight: 500,
+  },
+  reviewCardItem: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  reviewCardItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  reviewCardSubject: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+    flex: 1,
+  },
+  reviewCardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  reviewCardActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+  },
+  reviewCardActionDelete: {
+    backgroundColor: '#fef2f2',
+  },
+  reviewCardActionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2563eb',
+  },
+  reviewCardContent: {
+    fontSize: 15,
+    color: '#334155',
+    lineHeight: 22,
+  },
+  reviewCardModalContainer: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  reviewCardModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    paddingTop: Platform.OS === 'ios' ? 56 : 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  reviewCardModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  reviewCardModalCancel: {
+    fontSize: 16,
+    color: '#64748b',
+  },
+  reviewCardModalBody: {
+    padding: 20,
+  },
+  reviewCardContentInput: {
+    minHeight: 140,
   },
 })

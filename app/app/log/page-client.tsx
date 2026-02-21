@@ -339,6 +339,14 @@ export function LogPageClient() {
       .join('\n')
   }
 
+  const buildStartedAtFromPickedDate = (date: Date): string => {
+    // カレンダーで選んだ年月日をそのまま保存日として扱う（時刻はUTC正午で固定）
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}T12:00:00.000Z`
+  }
+
   const ensureReviewTasks = async (
     supabase: ReturnType<typeof createClient>,
     userId: string,
@@ -385,9 +393,7 @@ export function LogPageClient() {
       alert('日付を入力してください')
       return
     }
-    const inputDate = new Date(editDate)
-    inputDate.setHours(12, 0, 0, 0)
-    const startedAt = inputDate.toISOString()
+    const startedAt = buildStartedAtFromPickedDate(editDate)
     const selectedBook = referenceBooks.find((b) => b.id === editBookId)
     const subject = selectedBook?.name?.trim() || editSubject.trim() || 'その他'
 
@@ -705,9 +711,7 @@ export function LogPageClient() {
         if (!manualDate) {
           throw new Error('日付を選択してください')
         }
-        const inputDate = new Date(manualDate)
-        inputDate.setHours(12, 0, 0, 0)
-        const startedAt = inputDate.toISOString()
+        const startedAt = buildStartedAtFromPickedDate(manualDate)
 
         const noteValue = getManualNoteValue() || null
         const { data, error } = await supabase
