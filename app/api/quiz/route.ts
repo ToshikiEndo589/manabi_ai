@@ -31,23 +31,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'note is required' }, { status: 400 })
     }
 
+    // --- コスト削減のための工夫 ---
+    // 1. ノート文（Input Token）が長すぎるとコストがかさむため、最大400文字に切り詰める
+    const truncatedNote = note.length > 400 ? note.slice(0, 400) : note
+
+    // 2. システムプロンプトを極限まで短くし、解説（Output Token）も25文字以内に制限する
     const systemPrompt =
-      'あなたは受験生向けの復習クイズ作成AIです。' +
-      'ユーザーの学習内容から4択問題を作成してください。' +
-      `難易度は${difficultyText}に合わせてください。` +
-      '必ずJSONのみで出力し、形式は次の通りです。' +
-      '{"questions":[{"question":"...","choices":["...","...","...","..."],"correct_index":0,"explanation":"..."}]}' +
-      'choicesは必ず4つ、correct_indexは0-3の整数、explanationは簡潔な解説を含めてください。' +
-      '【重要】同じ学習内容でも、毎回異なる切り口・表現で問題を作成してください（前回と同じ問題にならないように工夫してください）。'
+      `学習内容から難易度【${difficultyText}】の4択問題を1題出力せよ。` +
+      `絶対形式:{"questions":[{"question":"問題","choices":["1","2","3","4"],"correct_index":0,"explanation":"解説(25字以内)"}]}` +
+      `前回と異なる切り口にすること。`
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-5-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `学習内容:\n${note}\n\n問題数:${questionCount}\n難易度:${difficultyText}`,
-        },
+        { role: 'user', content: truncatedNote },
       ],
       response_format: { type: 'json_object' },
 
