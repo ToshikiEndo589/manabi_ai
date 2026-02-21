@@ -115,27 +115,6 @@ export function ReviewScreen() {
             setReviewTasks(normalized as ReviewTask[])
         }
 
-        // 修復: マイグレーションで CASCADE 削除された復習タスクを復元（review_materials に紐づく pending タスクが無いものにスケジュールを再作成）
-        const repaired = await repairOrphanedReviewMaterials()
-        if (repaired) {
-            const { data: data2, error: error2 } = await supabase
-                .from('review_tasks')
-                .select('id, due_at, status, study_log_id, review_material_id, study_logs(note, subject, started_at, reference_book_id), review_materials(content, subject, reference_book_id, created_at, sm2_interval, sm2_ease_factor, sm2_repetitions)')
-                .eq('user_id', userId)
-                .eq('status', 'pending')
-                .lte('due_at', new Date().toISOString())
-                .order('due_at', { ascending: true })
-            if (!error2 && data2?.length) {
-                const normalized2 = (data2 as any[]).map((task) => {
-                    const sl = Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null
-                    const rm = Array.isArray(task.review_materials) ? task.review_materials[0] ?? null : task.review_materials ?? null
-                    const effectiveLog = rm ? { note: rm.content, subject: rm.subject, reference_book_id: rm.reference_book_id, started_at: rm.created_at } : sl
-                    return { ...task, study_logs: effectiveLog, review_materials: rm }
-                })
-                setReviewTasks(normalized2 as ReviewTask[])
-            }
-        }
-
         // Load books here too so we have images immediately
         const { data: booksData, error: booksError } = await supabase
             .from('reference_books')
@@ -150,40 +129,10 @@ export function ReviewScreen() {
         setLoading(false)
     }
 
-    const repairOrphanedReviewMaterials = async (): Promise<boolean> => {
-        const { data: materials, error: matError } = await supabase
-            .from('review_materials')
-            .select('id, created_at, sm2_interval, sm2_ease_factor, sm2_repetitions')
-            .eq('user_id', userId)
-        if (matError || !materials?.length) return false
-
-        const { data: allPendingTasks } = await supabase
-            .from('review_tasks')
-            .select('review_material_id')
-            .eq('user_id', userId)
-            .eq('status', 'pending')
-        const materialIdsWithPending = new Set((allPendingTasks || []).map((t: { review_material_id: string | null }) => t.review_material_id).filter(Boolean))
-
-        let inserted = false
-
-        for (const mat of materials) {
-            if (materialIdsWithPending.has(mat.id)) continue
-            // SM-2: orphaned material gets a single task due tomorrow
-            const dueDate = getNextDueDate(1)
-            const { error } = await supabase.from('review_tasks').insert({
-                user_id: userId,
-                review_material_id: mat.id,
-                due_at: dueDate.toISOString(),
-                status: 'pending',
-            })
-            if (!error) inserted = true
-        }
-        return inserted
-    }
-
     useEffect(() => {
         loadTasks()
     }, [userId])
+
 
     // Extracted loadBooks function for reusability
     const loadBooks = async () => {
@@ -203,6 +152,7 @@ export function ReviewScreen() {
         if (showCreateModal) {
             loadBooks()
         }
+
     }, [showCreateModal, userId])
 
     const pickBookImage = async () => {
