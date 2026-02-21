@@ -185,21 +185,6 @@ export function ReviewScreen() {
         loadTasks()
     }, [userId])
 
-    // Temporary fix for the user to restore their disappeared cards from the bug
-    useEffect(() => {
-        if (!userId) return
-        const restoreBuggedTasks = async () => {
-            const { error } = await supabase.from('review_tasks')
-                .update({ status: 'pending' })
-                .eq('user_id', userId)
-                .eq('status', 'completed')
-            if (!error) {
-                // If anything was restored, it will be safely refetched when they use the app
-                loadTasks()
-            }
-        }
-        restoreBuggedTasks()
-    }, [userId])
     // Extracted loadBooks function for reusability
     const loadBooks = async () => {
         const { data, error } = await supabase
