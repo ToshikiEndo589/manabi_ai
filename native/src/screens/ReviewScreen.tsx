@@ -438,11 +438,12 @@ export function ReviewScreen() {
                 sm2_repetitions: result.repetitions,
             }).eq('id', materialId)
 
-            // ③ 既存の pending タスクをすべて削除（古い固定スケジュールや重複を防ぐ）
+            // ③ 未来の pending タスクだけ削除（重複防止のため。今日期限の他タスクは消さない）
             await supabase.from('review_tasks')
                 .delete()
                 .eq('review_material_id', materialId)
                 .eq('status', 'pending')
+                .gt('due_at', new Date().toISOString())
 
             // ④ 次の復習タスクを1つ作成
             await supabase.from('review_tasks').insert({
