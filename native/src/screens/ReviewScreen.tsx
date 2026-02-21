@@ -442,7 +442,10 @@ export function ReviewScreen() {
         const result = calculateSM2(rating, currentState)
         const nextDueDate = getNextDueDate(result.nextDueDays)
 
-        // review_materials の SM-2 状態を更新
+        // ① 現在のタスクをすぐに completed にする（再ログイン後に再表示されないようにするための核心）
+        await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', taskId)
+
+        // ② review_materials の SM-2 状態を更新
         if (materialId) {
             await supabase.from('review_materials').update({
                 sm2_interval: result.interval,
@@ -450,14 +453,13 @@ export function ReviewScreen() {
                 sm2_repetitions: result.repetitions,
             }).eq('id', materialId)
 
-            // 既存の未来のpendingタスクを削除（古い固定スケジュールの残り）
+            // ③ 既存の pending タスクをすべて削除（古い固定スケジュールや重複を防ぐ）
             await supabase.from('review_tasks')
                 .delete()
                 .eq('review_material_id', materialId)
                 .eq('status', 'pending')
-                .gt('due_at', new Date().toISOString())
 
-            // 次の復習タスクを1つ作成
+            // ④ 次の復習タスクを1つ作成
             await supabase.from('review_tasks').insert({
                 user_id: userId,
                 review_material_id: materialId,
@@ -466,26 +468,10 @@ export function ReviewScreen() {
             })
         }
 
-        // テーマを完了済みにしてUIから除外
-        const noteContent = task.review_materials?.content || task.study_logs?.note || ''
-        const allThemes = splitThemes(noteContent)
-        const hidden = skippedThemes[taskId] || []
-
-        setSkippedThemes((prev) => ({
-            ...prev,
-            [taskId]: [...(prev[taskId] || []), theme]
-        }))
-
-        const isComplete = allThemes.length > 0 && allThemes.every((themeItem) => {
-            if (themeItem === theme) return true
-            return hidden.includes(themeItem)
-        })
-
-        if (isComplete) {
-            await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', taskId)
-            setReviewTasks((prev) => prev.filter((t) => t.id !== taskId))
-        }
+        // ⑤ UIからこのタスクを除去
+        setReviewTasks((prev) => prev.filter((t) => t.id !== taskId))
     }
+
 
 
 
