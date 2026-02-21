@@ -438,7 +438,7 @@ export function ReviewScreen() {
                 sm2_repetitions: result.repetitions,
             }).eq('id', materialId)
 
-            // ③ 未来の pending タスクだけ削除（重複防止のため。今日期限の他タスクは消さない）
+            // ③ 未来の pending タスクだけ削除（旧固定スケジュールの重複クリーンアップ）
             await supabase.from('review_tasks')
                 .delete()
                 .eq('review_material_id', materialId)
@@ -454,9 +454,10 @@ export function ReviewScreen() {
             })
         }
 
-        // ⑤ UIからこのタスクを除去
+        // ⑤ UIからこのタスクを除去（1件だけ）
         setReviewTasks((prev) => prev.filter((t) => t.id !== taskId))
     }
+
 
 
 
