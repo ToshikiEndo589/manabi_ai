@@ -498,8 +498,8 @@ export function ReviewScreen() {
                 console.log('====================================\n')
             }
             const themes: string[] = Array.isArray(data.themes) ? data.themes : []
-            const slots = themes.slice(0, 5).map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
-            while (slots.length < 5) slots.push('')
+            const slots = themes.slice(0, 10).map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
+            while (slots.length < 10) slots.push('')
             setAiNotes(slots)
             setCreateMode('ai')
         } catch (e) {
@@ -1111,7 +1111,6 @@ export function ReviewScreen() {
         setShowCreateModal(false)
         setCreateMode('ai')
         loadTasks()
-        Alert.alert('成功', '復習カードを作成しました！')
     }
 
     // DEBUG: Log tasks and groups

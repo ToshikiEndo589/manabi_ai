@@ -7,7 +7,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'dummy',
 })
 
-const MAX_THEMES = 5
+const MAX_THEMES = 10
 
 export async function POST(req: NextRequest) {
   try {
@@ -37,8 +37,8 @@ export async function POST(req: NextRequest) {
 
     const systemPrompt =
       'あなたは受験生向けの復習アプリのアシスタントです。' +
-      '参考書・ノート・プリントの画像から、復習用の「テーマ」（学習ポイント）を抽出してください。' +
-      `最大${MAX_THEMES}個まで、1行1テーマで簡潔に出力してください。` +
+      '参考書・ノート・プリントの画像から、復習に本当に重要なテーマ（学習ポイント）だけを厳選して抽出してください。' +
+      '重要でない内容や繰り返しは省き、最大10個まで、1行1テーマで簡潔に出力してください。' +
       '例: 「二次関数の最大・最小」「英単語 apple : りんご」「歴史 大化の改新」' +
       '必ずJSONのみで返し、形式は {"themes": ["テーマ1", "テーマ2", ...]} です。'
 
