@@ -1793,7 +1793,7 @@ export function ReviewScreen() {
                         >
                             <Ionicons name="camera" size={18} color="#2563eb" />
                             <Text style={styles.photoThemeButtonText}>
-                                {photoThemeLoading ? '抽出中...' : '写真からテーマを抽出（最大5件）'}
+                                {photoThemeLoading ? '抽出中...' : '写真からテーマを抽出（最大10件）'}
                             </Text>
                         </Pressable>
 
