@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
     Alert,
+    Dimensions,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -10,6 +11,7 @@ import {
     Modal,
     KeyboardAvoidingView,
     Platform,
+    PanResponder,
 } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { useProfile } from '../contexts/ProfileContext'
@@ -19,9 +21,17 @@ import type { SM2Rating } from '../lib/sm2'
 import { formatDateLabel, getStudyDay, getStudyDayDate, getTodayStart } from '../lib/date'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
+import { manipulateAsync as imageManipulateAsync, SaveFormat as ImageSaveFormat } from 'expo-image-manipulator'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { Image } from 'react-native'
 import type { ReferenceBook } from '../types'
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
+const CROP_HANDLE_SIZE = 24
+const CROP_EDGE_HIT = 14
+const CROP_MIN_REL = 0.05
+type CropRect = { x: number; y: number; width: number; height: number }
+type CropHandle = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight' | 'top' | 'bottom' | 'left' | 'right' | 'center' | null
 
 const DEFAULT_DIFFICULTY = 'normal'
 
@@ -110,6 +120,149 @@ export function ReviewScreen() {
     }, [endpoint])
 
     const [photoThemeLoading, setPhotoThemeLoading] = useState(false)
+    // 範囲選択（切り取り）モーダル
+    const [showCropModal, setShowCropModal] = useState(false)
+    const [cropImageUri, setCropImageUri] = useState<string | null>(null)
+    const [cropImageWidth, setCropImageWidth] = useState(0)
+    const [cropImageHeight, setCropImageHeight] = useState(0)
+    const [cropRect, setCropRect] = useState<CropRect>({ x: 0, y: 0, width: 1, height: 1 })
+    const [cropContainerLayout, setCropContainerLayout] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
+    /** 範囲選択画面で「再撮影」時に同じソース（カメラ/ライブラリ）を開く用 */
+    const [cropPhotoSource, setCropPhotoSource] = useState<'camera' | 'library' | null>(null)
+    const cropDragRef = useRef<{ handle: CropHandle; start: CropRect; lastX: number; lastY: number; totalDx: number; totalDy: number }>({
+        handle: null, start: { x: 0, y: 0, width: 1, height: 1 }, lastX: 0, lastY: 0, totalDx: 0, totalDy: 0,
+    })
+    const cropRectRef = useRef<CropRect>(cropRect)
+    const cropLayoutRef = useRef(cropContainerLayout)
+    const cropImgSizeRef = useRef({ w: cropImageWidth, h: cropImageHeight })
+    cropRectRef.current = cropRect
+    cropLayoutRef.current = cropContainerLayout
+    cropImgSizeRef.current = { w: cropImageWidth, h: cropImageHeight }
+
+    const getCropDisplayRect = (): { offsetX: number; offsetY: number; displayW: number; displayH: number } => {
+        const { width: cw, height: ch } = cropLayoutRef.current
+        const { w: iw, h: ih } = cropImgSizeRef.current
+        if (cw <= 0 || ch <= 0 || iw <= 0 || ih <= 0) return { offsetX: 0, offsetY: 0, displayW: 0, displayH: 0 }
+        const scale = Math.min(cw / iw, ch / ih)
+        const displayW = iw * scale
+        const displayH = ih * scale
+        return {
+            offsetX: (cw - displayW) / 2,
+            offsetY: (ch - displayH) / 2,
+            displayW,
+            displayH,
+        }
+    }
+
+    const clampCropRect = (r: CropRect): CropRect => {
+        let { x, y, width, height } = r
+        if (width < CROP_MIN_REL) width = CROP_MIN_REL
+        if (height < CROP_MIN_REL) height = CROP_MIN_REL
+        if (x < 0) { width += x; x = 0 }
+        if (y < 0) { height += y; y = 0 }
+        if (x + width > 1) width = 1 - x
+        if (y + height > 1) height = 1 - y
+        if (width < CROP_MIN_REL || height < CROP_MIN_REL) return cropRectRef.current
+        return { x, y, width, height }
+    }
+
+    const applyCropDrag = (start: CropRect, handle: CropHandle, dXRel: number, dYRel: number): CropRect => {
+        if (!handle || handle === 'center') {
+            let x = start.x + dXRel
+            let y = start.y + dYRel
+            if (x < 0) x = 0
+            if (y < 0) y = 0
+            if (x + start.width > 1) x = 1 - start.width
+            if (y + start.height > 1) y = 1 - start.height
+            return { ...start, x, y }
+        }
+        let { x, y, width, height } = start
+        if (handle === 'topLeft') {
+            x += dXRel
+            y += dYRel
+            width -= dXRel
+            height -= dYRel
+        } else if (handle === 'topRight') {
+            y += dYRel
+            width += dXRel
+            height -= dYRel
+        } else if (handle === 'bottomLeft') {
+            x += dXRel
+            width -= dXRel
+            height += dYRel
+        } else if (handle === 'bottomRight') {
+            width += dXRel
+            height += dYRel
+        } else if (handle === 'left') {
+            x += dXRel
+            width -= dXRel
+        } else if (handle === 'right') {
+            width += dXRel
+        } else if (handle === 'top') {
+            y += dYRel
+            height -= dYRel
+        } else if (handle === 'bottom') {
+            height += dYRel
+        }
+        return clampCropRect({ x, y, width, height })
+    }
+
+    const hitTestCropHandle = (px: number, py: number): CropHandle => {
+        const { offsetX, offsetY, displayW, displayH } = getCropDisplayRect()
+        const r = cropRectRef.current
+        const left = offsetX + r.x * displayW
+        const top = offsetY + r.y * displayH
+        const right = left + r.width * displayW
+        const bottom = top + r.height * displayH
+        const inLeft = px >= left - CROP_EDGE_HIT && px <= left + CROP_HANDLE_SIZE
+        const inRight = px >= right - CROP_HANDLE_SIZE && px <= right + CROP_EDGE_HIT
+        const inTop = py >= top - CROP_EDGE_HIT && py <= top + CROP_HANDLE_SIZE
+        const inBottom = py >= bottom - CROP_HANDLE_SIZE && py <= bottom + CROP_EDGE_HIT
+        if (inLeft && inTop) return 'topLeft'
+        if (inRight && inTop) return 'topRight'
+        if (inLeft && inBottom) return 'bottomLeft'
+        if (inRight && inBottom) return 'bottomRight'
+        if (inLeft && py >= top && py <= bottom) return 'left'
+        if (inRight && py >= top && py <= bottom) return 'right'
+        if (inTop && px >= left && px <= right) return 'top'
+        if (inBottom && px >= left && px <= right) return 'bottom'
+        if (px >= left && px <= right && py >= top && py <= bottom) return 'center'
+        return null
+    }
+
+    const cropPanResponder = useMemo(() => PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (evt) => {
+            const { locationX, locationY } = evt.nativeEvent
+            const handle = hitTestCropHandle(locationX, locationY)
+            cropDragRef.current = {
+                handle,
+                start: { ...cropRectRef.current },
+                lastX: evt.nativeEvent.pageX,
+                lastY: evt.nativeEvent.pageY,
+                totalDx: 0,
+                totalDy: 0,
+            }
+        },
+        onPanResponderMove: (evt) => {
+            const ref = cropDragRef.current
+            if (ref.handle == null) return
+            const { offsetX, offsetY, displayW, displayH } = getCropDisplayRect()
+            if (displayW <= 0 || displayH <= 0) return
+            const pageX = evt.nativeEvent.pageX
+            const pageY = evt.nativeEvent.pageY
+            ref.totalDx += pageX - ref.lastX
+            ref.totalDy += pageY - ref.lastY
+            ref.lastX = pageX
+            ref.lastY = pageY
+            const dXRel = ref.totalDx / displayW
+            const dYRel = ref.totalDy / displayH
+            const next = applyCropDrag(ref.start, ref.handle, dXRel, dYRel)
+            setCropRect(next)
+        },
+        onPanResponderRelease: () => {},
+    }), [])
 
     const loadTasks = async () => {
         setLoading(true)
@@ -195,27 +348,57 @@ export function ReviewScreen() {
             return
         }
         const launch = useCamera
-            ? () => ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.35, base64: true })
-            : () => ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.35, base64: true })
+            ? () => ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 })
+            : () => ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 })
         const result = await launch()
-        if (result.canceled || !result.assets?.[0]) return
-        const asset = result.assets[0]
-        if (!asset.base64) {
-            Alert.alert('エラー', '画像データの取得に失敗しました。もう一度お試しください。')
+        if (result.canceled || !result.assets?.[0]?.uri) return
+        const uri = result.assets[0].uri
+        await new Promise<void>((resolve, reject) => {
+            Image.getSize(uri, (w, h) => {
+                setCropPhotoSource(useCamera ? 'camera' : 'library')
+                setCropImageUri(uri)
+                setCropImageWidth(w)
+                setCropImageHeight(h)
+                setCropRect({ x: 0, y: 0, width: 1, height: 1 })
+                setShowCropModal(true)
+                resolve()
+            }, reject)
+        }).catch(() => {
+            Alert.alert('エラー', '画像の読み込みに失敗しました。')
+        })
+    }
+
+    const submitCropAndExtractThemes = async () => {
+        if (!cropImageUri || !themeFromImageEndpoint) return
+        const { w: iw, h: ih } = cropImgSizeRef.current
+        const originX = Math.round(cropRect.x * iw)
+        const originY = Math.round(cropRect.y * ih)
+        const width = Math.round(cropRect.width * iw)
+        const height = Math.round(cropRect.height * ih)
+        if (width <= 0 || height <= 0) {
+            Alert.alert('エラー', '有効な範囲を選択してください。')
             return
         }
-        if (asset.base64.length > 2_500_000) {
-            Alert.alert('画像サイズが大きすぎます', '写真をトリミングするか、文字が読める範囲で近づいて再撮影してください。')
-            return
-        }
+        setShowCropModal(false)
+        setCropImageUri(null)
         setPhotoThemeLoading(true)
         try {
+            const result = await imageManipulateAsync(
+                cropImageUri,
+                [{ crop: { originX, originY, width, height } }],
+                { base64: true, format: ImageSaveFormat.JPEG, compress: 0.7 }
+            )
+            const base64 = result.base64
+            if (!base64 || base64.length > 2_500_000) {
+                Alert.alert('画像サイズが大きすぎます', '範囲を小さくして再度お試しください。')
+                return
+            }
             const res = await fetch(themeFromImageEndpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    imageBase64: asset.base64,
-                    mimeType: asset.mimeType || 'image/jpeg',
+                    imageBase64: base64,
+                    mimeType: 'image/jpeg',
                 }),
             })
             if (!res.ok) {
@@ -226,9 +409,7 @@ export function ReviewScreen() {
                     message = err.details || err.error || message
                 } catch {
                     message = `${message} (HTTP ${res.status})`
-                    if (text) {
-                        message += `: ${text.slice(0, 120)}`
-                    }
+                    if (text) message += `: ${text.slice(0, 120)}`
                 }
                 throw new Error(`${message}\nURL: ${themeFromImageEndpoint}`)
             }
@@ -1287,6 +1468,98 @@ export function ReviewScreen() {
                 )}
             </View>
 
+            {/* 写真の範囲選択（切り取り）モーダル */}
+            <Modal
+                visible={showCropModal}
+                animationType="slide"
+                transparent={false}
+                onRequestClose={() => { setShowCropModal(false); setCropImageUri(null) }}
+            >
+                <View style={styles.cropModalRoot}>
+                    <View style={styles.cropModalHeader}>
+                        <Pressable
+                            onPress={() => { setShowCropModal(false); setCropImageUri(null) }}
+                            hitSlop={12}
+                            style={styles.cropModalClose}
+                        >
+                            <Ionicons name="close" size={24} color="#fff" />
+                        </Pressable>
+                        <Text style={styles.cropModalTitle}>抽出する範囲を切り取ろう</Text>
+                        <View style={styles.cropModalHeaderRight} />
+                    </View>
+                    {cropImageUri && (
+                        <View
+                            style={styles.cropImageContainer}
+                            onLayout={(e) => setCropContainerLayout(e.nativeEvent.layout)}
+                            {...cropPanResponder.panHandlers}
+                        >
+                            <Image
+                                source={{ uri: cropImageUri }}
+                                style={styles.cropImage}
+                                resizeMode="contain"
+                            />
+                            {cropContainerLayout.width > 0 && cropContainerLayout.height > 0 && (() => {
+                                const { offsetX, offsetY, displayW, displayH } = (() => {
+                                    const cw = cropContainerLayout.width
+                                    const ch = cropContainerLayout.height
+                                    const iw = cropImageWidth || 1
+                                    const ih = cropImageHeight || 1
+                                    const scale = Math.min(cw / iw, ch / ih)
+                                    const dw = iw * scale
+                                    const dh = ih * scale
+                                    return { offsetX: (cw - dw) / 2, offsetY: (ch - dh) / 2, displayW: dw, displayH: dh }
+                                })()
+                                const selLeft = offsetX + cropRect.x * displayW
+                                const selTop = offsetY + cropRect.y * displayH
+                                const selWidth = cropRect.width * displayW
+                                const selHeight = cropRect.height * displayH
+                                const ch = cropContainerLayout.height
+                                const cw = cropContainerLayout.width
+                                return (
+                                    <>
+                                        <View style={[styles.cropDim, { top: 0, left: 0, right: 0, height: selTop }]} pointerEvents="none" />
+                                        <View style={[styles.cropDim, { bottom: 0, left: 0, right: 0, height: ch - selTop - selHeight }]} pointerEvents="none" />
+                                        <View style={[styles.cropDim, { left: 0, top: selTop, width: selLeft, height: selHeight }]} pointerEvents="none" />
+                                        <View style={[styles.cropDim, { right: 0, top: selTop, width: cw - selLeft - selWidth, height: selHeight }]} pointerEvents="none" />
+                                        <View
+                                            style={[
+                                                styles.cropFrame,
+                                                { left: selLeft, top: selTop, width: selWidth, height: selHeight },
+                                            ]}
+                                            pointerEvents="none"
+                                        >
+                                            <View style={styles.cropCenterCrossV} pointerEvents="none" />
+                                            <View style={styles.cropCenterCrossH} pointerEvents="none" />
+                                        </View>
+                                    </>
+                                )
+                            })()}
+                        </View>
+                    )}
+                    <View style={styles.cropModalFooter}>
+                        <View style={styles.cropModalFooterRow}>
+                            <Pressable
+                                style={styles.cropRetakeButton}
+                                onPress={() => {
+                                    setShowCropModal(false)
+                                    setCropImageUri(null)
+                                    if (cropPhotoSource) handlePhotoToThemes(cropPhotoSource === 'camera')
+                                }}
+                            >
+                                <Text style={styles.cropRetakeButtonText}>再撮影</Text>
+                            </Pressable>
+                            <Pressable
+                                style={styles.cropSubmitButton}
+                                onPress={submitCropAndExtractThemes}
+                            >
+                                <Text style={styles.cropSubmitButtonText}>この範囲で抽出する</Text>
+                                <Ionicons name="add" size={20} color="#fff" />
+                            </Pressable>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
             <Modal
                 visible={showCreateModal}
                 animationType="slide"
@@ -2325,5 +2598,101 @@ const styles = StyleSheet.create({
     editThemeSubmitText: {
         color: '#713f12',
         fontWeight: '700',
+    },
+    cropModalRoot: {
+        flex: 1,
+        backgroundColor: '#000',
+    },
+    cropModalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 16,
+        paddingTop: Platform.OS === 'ios' ? 56 : 24,
+        paddingBottom: 12,
+    },
+    cropModalClose: {
+        width: 40,
+        height: 40,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cropModalTitle: {
+        fontSize: 16,
+        color: '#fff',
+        fontWeight: '600',
+    },
+    cropModalHeaderRight: {
+        width: 40,
+    },
+    cropImageContainer: {
+        flex: 1,
+        position: 'relative',
+    },
+    cropImage: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: undefined,
+        height: undefined,
+    },
+    cropDim: {
+        position: 'absolute',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+    },
+    cropFrame: {
+        position: 'absolute',
+        borderWidth: 2,
+        borderColor: '#3b82f6',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cropCenterCrossV: {
+        width: 2,
+        height: 20,
+        backgroundColor: 'rgba(255,255,255,0.8)',
+    },
+    cropCenterCrossH: {
+        position: 'absolute',
+        width: 20,
+        height: 2,
+        backgroundColor: 'rgba(255,255,255,0.8)',
+    },
+    cropModalFooter: {
+        padding: 16,
+        paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+    },
+    cropModalFooterRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    cropRetakeButton: {
+        paddingVertical: 14,
+        paddingHorizontal: 20,
+        borderRadius: 12,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        justifyContent: 'center',
+    },
+    cropRetakeButtonText: {
+        color: '#fff',
+        fontSize: 16,
+    },
+    cropSubmitButton: {
+        flex: 1,
+        backgroundColor: '#3b82f6',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 14,
+        borderRadius: 12,
+        gap: 8,
+    },
+    cropSubmitButtonText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '600',
     },
 })

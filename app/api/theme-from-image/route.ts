@@ -57,6 +57,30 @@ export async function POST(req: NextRequest) {
       response_format: { type: 'json_object' },
     })
 
+    // 料金計算とターミナル出力 (gpt-4o)
+    // - Input: $2.50 / 1M tokens
+    // - Output: $10.00 / 1M tokens
+    if (completion.usage) {
+      const promptTokens = completion.usage.prompt_tokens
+      const completionTokens = completion.usage.completion_tokens
+      const totalTokens = completion.usage.total_tokens
+
+      const inputCostUSD = (promptTokens / 1_000_000) * 2.50
+      const outputCostUSD = (completionTokens / 1_000_000) * 10.00
+      const totalCostUSD = inputCostUSD + outputCostUSD
+
+      // 1ドル = 155円として概算
+      const totalCostJPY = totalCostUSD * 155
+
+      console.log('====================================')
+      console.log('[Theme Extraction] API Usage & Cost')
+      console.log(`Model: gpt-4o`)
+      console.log(`Tokens: ${totalTokens} (Input: ${promptTokens}, Output: ${completionTokens})`)
+      console.log(`Cost (USD): $${totalCostUSD.toFixed(5)}`)
+      console.log(`Cost (JPY): 約 ${totalCostJPY.toFixed(2)} 円`)
+      console.log('====================================')
+    }
+
     const raw = completion.choices[0]?.message?.content?.trim()
     if (!raw) {
       return NextResponse.json({ error: 'empty response' }, { status: 500 })
