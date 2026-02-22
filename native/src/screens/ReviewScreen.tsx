@@ -129,8 +129,25 @@ export function ReviewScreen() {
     const [cropContainerLayout, setCropContainerLayout] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
     /** 範囲選択画面で「再撮影」時に同じソース（カメラ/ライブラリ）を開く用 */
     const [cropPhotoSource, setCropPhotoSource] = useState<'camera' | 'library' | null>(null)
-    const cropDragRef = useRef<{ handle: CropHandle; start: CropRect; lastX: number; lastY: number; totalDx: number; totalDy: number }>({
-        handle: null, start: { x: 0, y: 0, width: 1, height: 1 }, lastX: 0, lastY: 0, totalDx: 0, totalDy: 0,
+    const cropDragRef = useRef<{
+        handle: CropHandle;
+        start: CropRect;
+        lastX: number;
+        lastY: number;
+        totalDx: number;
+        totalDy: number;
+        isPinch: boolean;
+        pinchStartRect: CropRect;
+        pinchStartDist: number;
+        pinchStartMid: { x: number; y: number };
+    }>({
+        handle: null,
+        start: { x: 0, y: 0, width: 1, height: 1 },
+        lastX: 0, lastY: 0, totalDx: 0, totalDy: 0,
+        isPinch: false,
+        pinchStartRect: { x: 0, y: 0, width: 1, height: 1 },
+        pinchStartDist: 0,
+        pinchStartMid: { x: 0, y: 0 },
     })
     const cropRectRef = useRef<CropRect>(cropRect)
     const cropLayoutRef = useRef(cropContainerLayout)
@@ -234,34 +251,91 @@ export function ReviewScreen() {
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: (evt) => {
-            const { locationX, locationY } = evt.nativeEvent
-            const handle = hitTestCropHandle(locationX, locationY)
-            cropDragRef.current = {
-                handle,
-                start: { ...cropRectRef.current },
-                lastX: evt.nativeEvent.pageX,
-                lastY: evt.nativeEvent.pageY,
-                totalDx: 0,
-                totalDy: 0,
+            const touches = evt.nativeEvent.touches
+            if (touches && touches.length >= 2) {
+                const t0 = touches[0]
+                const t1 = touches[1]
+                const dist = Math.hypot(t1.pageX - t0.pageX, t1.pageY - t0.pageY)
+                const midX = (t0.pageX + t1.pageX) / 2
+                const midY = (t0.pageY + t1.pageY) / 2
+                cropDragRef.current = {
+                    ...cropDragRef.current,
+                    isPinch: true,
+                    pinchStartRect: { ...cropRectRef.current },
+                    pinchStartDist: dist,
+                    pinchStartMid: { x: midX, y: midY },
+                }
+            } else {
+                const { locationX, locationY } = evt.nativeEvent
+                const handle = hitTestCropHandle(locationX, locationY)
+                cropDragRef.current = {
+                    ...cropDragRef.current,
+                    handle,
+                    isPinch: false,
+                    start: { ...cropRectRef.current },
+                    lastX: evt.nativeEvent.pageX,
+                    lastY: evt.nativeEvent.pageY,
+                    totalDx: 0,
+                    totalDy: 0,
+                }
             }
         },
         onPanResponderMove: (evt) => {
+            const touches = evt.nativeEvent.touches
             const ref = cropDragRef.current
-            if (ref.handle == null) return
-            const { offsetX, offsetY, displayW, displayH } = getCropDisplayRect()
+            const { displayW, displayH } = getCropDisplayRect()
             if (displayW <= 0 || displayH <= 0) return
-            const pageX = evt.nativeEvent.pageX
-            const pageY = evt.nativeEvent.pageY
-            ref.totalDx += pageX - ref.lastX
-            ref.totalDy += pageY - ref.lastY
-            ref.lastX = pageX
-            ref.lastY = pageY
-            const dXRel = ref.totalDx / displayW
-            const dYRel = ref.totalDy / displayH
-            const next = applyCropDrag(ref.start, ref.handle, dXRel, dYRel)
-            setCropRect(next)
+
+            if (touches && touches.length >= 2) {
+                // --- 2本指: ピンチで矩形を拡大縮小、中心ドラッグで移動 ---
+                const t0 = touches[0]
+                const t1 = touches[1]
+                const dist = Math.hypot(t1.pageX - t0.pageX, t1.pageY - t0.pageY)
+                const midX = (t0.pageX + t1.pageX) / 2
+                const midY = (t0.pageY + t1.pageY) / 2
+
+                if (!ref.isPinch || ref.pinchStartDist <= 0) {
+                    // 途中から2本指になった場合は基準を更新
+                    cropDragRef.current.isPinch = true
+                    cropDragRef.current.pinchStartRect = { ...cropRectRef.current }
+                    cropDragRef.current.pinchStartDist = dist
+                    cropDragRef.current.pinchStartMid = { x: midX, y: midY }
+                    return
+                }
+
+                const scale = dist / ref.pinchStartDist
+                const src = ref.pinchStartRect
+
+                // 中心を保ちつつサイズをscale倍する
+                const newW = Math.min(1, src.width * scale)
+                const newH = Math.min(1, src.height * scale)
+
+                // 移動量（ピンチ中心のドラッグ）
+                const dxRel = (midX - ref.pinchStartMid.x) / displayW
+                const dyRel = (midY - ref.pinchStartMid.y) / displayH
+
+                let newX = src.x + (src.width - newW) / 2 + dxRel
+                let newY = src.y + (src.height - newH) / 2 + dyRel
+
+                setCropRect(clampCropRect({ x: newX, y: newY, width: newW, height: newH }))
+            } else {
+                // --- 1本指: 従来通りハンドル操作 ---
+                if (ref.handle == null) return
+                const pageX = evt.nativeEvent.pageX
+                const pageY = evt.nativeEvent.pageY
+                ref.totalDx += pageX - ref.lastX
+                ref.totalDy += pageY - ref.lastY
+                ref.lastX = pageX
+                ref.lastY = pageY
+                const dXRel = ref.totalDx / displayW
+                const dYRel = ref.totalDy / displayH
+                const next = applyCropDrag(ref.start, ref.handle, dXRel, dYRel)
+                setCropRect(next)
+            }
         },
-        onPanResponderRelease: () => { },
+        onPanResponderRelease: () => {
+            cropDragRef.current.isPinch = false
+        },
     }), [])
 
     const loadTasks = async () => {
@@ -1482,19 +1556,11 @@ export function ReviewScreen() {
                 visible={showCropModal}
                 animationType="slide"
                 transparent={false}
-                onRequestClose={() => { setShowCropModal(false); setCropImageUri(null) }}
+                onRequestClose={() => { }}
             >
                 <View style={styles.cropModalRoot}>
                     <View style={styles.cropModalHeader}>
-                        <Pressable
-                            onPress={() => { setShowCropModal(false); setCropImageUri(null) }}
-                            hitSlop={12}
-                            style={styles.cropModalClose}
-                        >
-                            <Ionicons name="close" size={24} color="#fff" />
-                        </Pressable>
-                        <Text style={styles.cropModalTitle}>抽出する範囲を切り取ろう</Text>
-                        <View style={styles.cropModalHeaderRight} />
+                        <Text style={styles.cropModalTitle}>抽出する範囲を選ぼう 📍</Text>
                     </View>
                     {cropImageUri && (
                         <View
@@ -1546,31 +1612,19 @@ export function ReviewScreen() {
                         </View>
                     )}
                     <View style={styles.cropModalFooter}>
-                        <View style={styles.cropModalFooterRow}>
-                            <Pressable
-                                style={styles.cropRetakeButton}
-                                onPress={() => {
-                                    setShowCropModal(false)
-                                    setCropImageUri(null)
-                                    if (cropPhotoSource) handlePhotoToThemes(cropPhotoSource === 'camera')
-                                }}
-                            >
-                                <Text style={styles.cropRetakeButtonText}>再撮影</Text>
-                            </Pressable>
-                            <Pressable
-                                style={styles.cropSubmitButton}
-                                onPress={submitCropAndExtractThemes}
-                            >
-                                <Text style={styles.cropSubmitButtonText}>この範囲で抽出する</Text>
-                                <Ionicons name="add" size={20} color="#fff" />
-                            </Pressable>
-                        </View>
+                        <Pressable
+                            style={styles.cropSubmitButton}
+                            onPress={submitCropAndExtractThemes}
+                        >
+                            <Text style={styles.cropSubmitButtonText}>この範囲で抽出する</Text>
+                            <Ionicons name="add" size={20} color="#fff" />
+                        </Pressable>
                     </View>
                 </View>
             </Modal>
 
             <Modal
-                visible={showCreateModal}
+                visible={showCreateModal && !showCropModal}
                 animationType="slide"
                 transparent={false}
                 onRequestClose={() => setShowCreateModal(false)}
