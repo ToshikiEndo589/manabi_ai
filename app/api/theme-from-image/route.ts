@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
         {
           role: 'user',
           content: [
-            { type: 'image_url', image_url: { url: dataUrl } },
+            { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
             { type: 'text', text: 'この画像から復習用テーマを最大5個抽出し、JSONで返してください。' },
           ],
         },
