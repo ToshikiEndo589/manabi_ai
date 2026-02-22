@@ -1583,7 +1583,10 @@ export function ReviewScreen() {
                 visible={showCropModal}
                 animationType="slide"
                 transparent={false}
-                onRequestClose={() => { }}
+                onRequestClose={() => {
+                    setShowCropModal(false)
+                    setCropImageUri(null)
+                }}
             >
                 <View style={styles.cropModalRoot}>
                     {/* 半透明オーバーレイヘッダー（absolute） */}
@@ -1595,6 +1598,16 @@ export function ReviewScreen() {
                             </View>
                             <Text style={styles.cropModalTitle}>抽出する範囲を選ぼう</Text>
                         </View>
+                        <Pressable
+                            style={styles.cropModalClose}
+                            onPress={() => {
+                                setShowCropModal(false)
+                                setCropImageUri(null)
+                            }}
+                            hitSlop={12}
+                        >
+                            <Ionicons name="close" size={26} color="#e2e8f0" />
+                        </Pressable>
                     </View>
                     {/* 画像エリア（ヘッダー分のpadding含む） */}
                     {cropImageUri && (
@@ -2730,6 +2743,9 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         zIndex: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
         paddingHorizontal: 20,
         paddingTop: Platform.OS === 'ios' ? 62 : 30,
         paddingBottom: 14,
