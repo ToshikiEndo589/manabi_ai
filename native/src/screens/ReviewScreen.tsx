@@ -491,7 +491,7 @@ export function ReviewScreen() {
             if (data.costDetails) {
                 console.log('\n====================================')
                 console.log('📸 [Theme Extraction] API Usage & Cost')
-                console.log(`Model: gpt-4o`)
+                console.log(`Model: gpt-4o-mini`)
                 console.log(`Tokens: ${data.costDetails.totalTokens} (Input: ${data.costDetails.promptTokens}, Output: ${data.costDetails.completionTokens})`)
                 console.log(`Cost (USD): $${data.costDetails.totalCostUSD.toFixed(5)}`)
                 console.log(`Cost (JPY): 約 ${data.costDetails.totalCostJPY.toFixed(2)} 円`)
@@ -502,7 +502,6 @@ export function ReviewScreen() {
             while (slots.length < 5) slots.push('')
             setAiNotes(slots)
             setCreateMode('ai')
-            Alert.alert('完了', `${themes.length}件のテーマを抽出しました。内容を確認してから「作成」を押してください。`)
         } catch (e) {
             const msg = e instanceof Error ? e.message : 'テーマの抽出に失敗しました'
             Alert.alert('エラー', msg)
