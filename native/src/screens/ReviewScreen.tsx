@@ -1559,12 +1559,15 @@ export function ReviewScreen() {
                 onRequestClose={() => { }}
             >
                 <View style={styles.cropModalRoot}>
+                    {/* 半透明オーバーレイヘッダー（absolute） */}
                     <View style={styles.cropModalHeader}>
                         <Text style={styles.cropModalTitle}>抽出する範囲を選ぼう 📍</Text>
+                        <Text style={styles.cropModalSubtitle}>1本指でドラッグ、2本指でピンチして範囲を調整</Text>
                     </View>
+                    {/* 画像エリア（ヘッダー分のpadding含む） */}
                     {cropImageUri && (
                         <View
-                            style={styles.cropImageContainer}
+                            style={[styles.cropImageContainer, { paddingTop: Platform.OS === 'ios' ? 120 : 96 }]}
                             onLayout={(e) => setCropContainerLayout(e.nativeEvent.layout)}
                             {...cropPanResponder.panHandlers}
                         >
@@ -2667,12 +2670,17 @@ const styles = StyleSheet.create({
         backgroundColor: '#000',
     },
     cropModalHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingTop: Platform.OS === 'ios' ? 56 : 24,
-        paddingBottom: 12,
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 10,
+        paddingHorizontal: 20,
+        paddingTop: Platform.OS === 'ios' ? 60 : 28,
+        paddingBottom: 16,
+        backgroundColor: 'rgba(0,0,0,0.55)',
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(255,255,255,0.1)',
     },
     cropModalClose: {
         width: 40,
@@ -2681,9 +2689,15 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     cropModalTitle: {
-        fontSize: 16,
-        color: '#fff',
-        fontWeight: '600',
+        fontSize: 22,
+        color: '#ffffff',
+        fontWeight: '700',
+        letterSpacing: 0.5,
+    },
+    cropModalSubtitle: {
+        fontSize: 12,
+        color: 'rgba(255,255,255,0.6)',
+        marginTop: 4,
     },
     cropModalHeaderRight: {
         width: 40,
@@ -2724,8 +2738,12 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.8)',
     },
     cropModalFooter: {
-        padding: 16,
-        paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+        paddingHorizontal: 20,
+        paddingTop: 12,
+        paddingBottom: Platform.OS === 'ios' ? 38 : 20,
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(255,255,255,0.1)',
     },
     cropModalFooterRow: {
         flexDirection: 'row',
@@ -2744,18 +2762,23 @@ const styles = StyleSheet.create({
         fontSize: 16,
     },
     cropSubmitButton: {
-        flex: 1,
         backgroundColor: '#3b82f6',
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 14,
-        borderRadius: 12,
+        paddingVertical: 16,
+        borderRadius: 14,
         gap: 8,
+        shadowColor: '#3b82f6',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.5,
+        shadowRadius: 8,
+        elevation: 6,
     },
     cropSubmitButtonText: {
         color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
+        fontSize: 17,
+        fontWeight: '700',
+        letterSpacing: 0.3,
     },
 })
