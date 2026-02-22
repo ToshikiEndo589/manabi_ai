@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
     Alert,
-    Dimensions,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -26,10 +25,12 @@ import DateTimePicker from '@react-native-community/datetimepicker'
 import { Image } from 'react-native'
 import type { ReferenceBook } from '../types'
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 const CROP_HANDLE_SIZE = 24
 const CROP_EDGE_HIT = 14
 const CROP_MIN_REL = 0.05
+const MAX_THEME_FROM_IMAGE = 10
+const MAX_IMAGE_BASE64_CHARS = 2_500_000
+const INITIAL_CROP_RECT: CropRect = { x: 0.06, y: 0.12, width: 0.88, height: 0.68 }
 type CropRect = { x: number; y: number; width: number; height: number }
 type CropHandle = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight' | 'top' | 'bottom' | 'left' | 'right' | 'center' | null
 
@@ -409,6 +410,38 @@ export function ReviewScreen() {
 
     }, [showCreateModal, userId])
 
+    const buildCroppedBase64ForThemeExtraction = async (
+        imageUri: string,
+        cropBox: { originX: number; originY: number; width: number; height: number }
+    ): Promise<string> => {
+        const maxSideSteps = [2000, 1600, 1280, 1080]
+        const compressSteps = [0.72, 0.6, 0.5, 0.4]
+
+        for (let i = 0; i < maxSideSteps.length; i += 1) {
+            const maxSide = maxSideSteps[i]
+            const compress = compressSteps[i] ?? 0.45
+            const scale = Math.min(1, maxSide / Math.max(cropBox.width, cropBox.height))
+            const resizeWidth = Math.max(1, Math.round(cropBox.width * scale))
+            const resizeHeight = Math.max(1, Math.round(cropBox.height * scale))
+
+            const actions: any[] = [{ crop: cropBox }]
+            if (scale < 1) {
+                actions.push({ resize: { width: resizeWidth, height: resizeHeight } })
+            }
+
+            const attempt = await imageManipulateAsync(imageUri, actions, {
+                base64: true,
+                format: ImageSaveFormat.JPEG,
+                compress,
+            })
+            const base64 = attempt.base64
+            if (base64 && base64.length <= MAX_IMAGE_BASE64_CHARS) {
+                return base64
+            }
+        }
+        throw new Error('画像サイズが大きすぎます。範囲を少し小さくして再度お試しください。')
+    }
+
     const handlePhotoToThemes = async (useCamera: boolean) => {
         if (!themeFromImageEndpoint) {
             Alert.alert('設定エラー', 'APIのURLが設定されていません。')
@@ -433,7 +466,7 @@ export function ReviewScreen() {
                 setCropImageUri(uri)
                 setCropImageWidth(w)
                 setCropImageHeight(h)
-                setCropRect({ x: 0, y: 0, width: 1, height: 1 })
+                setCropRect(INITIAL_CROP_RECT)
                 setShowCropModal(true)
                 resolve()
             }, reject)
@@ -457,16 +490,12 @@ export function ReviewScreen() {
         setCropImageUri(null)
         setPhotoThemeLoading(true)
         try {
-            const result = await imageManipulateAsync(
-                cropImageUri,
-                [{ crop: { originX, originY, width, height } }],
-                { base64: true, format: ImageSaveFormat.JPEG, compress: 0.7 }
-            )
-            const base64 = result.base64
-            if (!base64 || base64.length > 2_500_000) {
-                Alert.alert('画像サイズが大きすぎます', '範囲を小さくして再度お試しください。')
-                return
-            }
+            const base64 = await buildCroppedBase64ForThemeExtraction(cropImageUri, {
+                originX,
+                originY,
+                width,
+                height,
+            })
             const res = await fetch(themeFromImageEndpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -498,8 +527,8 @@ export function ReviewScreen() {
                 console.log('====================================\n')
             }
             const themes: string[] = Array.isArray(data.themes) ? data.themes : []
-            const slots = themes.slice(0, 10).map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
-            while (slots.length < 10) slots.push('')
+            const slots = themes.slice(0, MAX_THEME_FROM_IMAGE).map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
+            while (slots.length < MAX_THEME_FROM_IMAGE) slots.push('')
             setAiNotes(slots)
             setCreateMode('ai')
         } catch (e) {
@@ -1559,8 +1588,13 @@ export function ReviewScreen() {
                 <View style={styles.cropModalRoot}>
                     {/* 半透明オーバーレイヘッダー（absolute） */}
                     <View style={styles.cropModalHeader}>
-                        <Text style={styles.cropModalTitle}>抽出する範囲を選ぼう 📍</Text>
-                        <Text style={styles.cropModalSubtitle}>1本指でドラッグ、2本指でピンチして範囲を調整</Text>
+                        <View style={styles.cropTitleRow}>
+                            <View style={styles.cropTitleBadge}>
+                                <Ionicons name="scan-circle-outline" size={16} color="#93c5fd" />
+                                <Text style={styles.cropTitleBadgeText}>AI</Text>
+                            </View>
+                            <Text style={styles.cropModalTitle}>抽出する範囲を選ぼう</Text>
+                        </View>
                     </View>
                     {/* 画像エリア（ヘッダー分のpadding含む） */}
                     {cropImageUri && (
@@ -1618,7 +1652,7 @@ export function ReviewScreen() {
                             onPress={submitCropAndExtractThemes}
                         >
                             <Text style={styles.cropSubmitButtonText}>この範囲で抽出する</Text>
-                            <Ionicons name="add" size={20} color="#fff" />
+                            <Ionicons name="sparkles-outline" size={20} color="#fff" />
                         </Pressable>
                     </View>
                 </View>
@@ -1776,27 +1810,6 @@ export function ReviewScreen() {
                             )}
                         </View>
 
-                        <Pressable
-                            style={[styles.outlineButton, styles.photoThemeButton]}
-                            onPress={() => {
-                                Alert.alert(
-                                    '写真からテーマを抽出',
-                                    'カメラで撮影するか、ライブラリから選んでください。',
-                                    [
-                                        { text: 'キャンセル', style: 'cancel' },
-                                        { text: 'カメラ', onPress: () => handlePhotoToThemes(true) },
-                                        { text: 'ライブラリ', onPress: () => handlePhotoToThemes(false) },
-                                    ]
-                                )
-                            }}
-                            disabled={photoThemeLoading}
-                        >
-                            <Ionicons name="camera" size={18} color="#2563eb" />
-                            <Text style={styles.photoThemeButtonText}>
-                                {photoThemeLoading ? '抽出中...' : '写真からテーマを抽出（最大10件）'}
-                            </Text>
-                        </Pressable>
-
                         <View style={styles.modeToggle}>
                             <Pressable
                                 style={[styles.modeButton, createMode === 'ai' && styles.modeButtonActive]}
@@ -1819,6 +1832,29 @@ export function ReviewScreen() {
                         {createMode === 'ai' ? (
                             <View style={styles.inputSection}>
                                 <Text style={styles.sectionTitle}>学習メモ（AIが問題を自動生成）</Text>
+                                <View style={styles.aiOnlyHeaderRow}>
+                                    <Text style={styles.aiOnlyChip}>AIモード専用</Text>
+                                </View>
+                                <Pressable
+                                    style={[styles.outlineButton, styles.photoThemeButton]}
+                                    onPress={() => {
+                                        Alert.alert(
+                                            '写真からテーマを抽出',
+                                            'カメラで撮影するか、ライブラリから選んでください。',
+                                            [
+                                                { text: 'キャンセル', style: 'cancel' },
+                                                { text: 'カメラ', onPress: () => handlePhotoToThemes(true) },
+                                                { text: 'ライブラリ', onPress: () => handlePhotoToThemes(false) },
+                                            ]
+                                        )
+                                    }}
+                                    disabled={photoThemeLoading}
+                                >
+                                    <Ionicons name="camera" size={18} color="#2563eb" />
+                                    <Text style={styles.photoThemeButtonText}>
+                                        {photoThemeLoading ? '抽出中...' : `写真からテーマを抽出（最大${MAX_THEME_FROM_IMAGE}件）`}
+                                    </Text>
+                                </Pressable>
                                 {aiNotes.map((note, index) => (
                                     <View key={`note-${index}`} style={styles.noteRow}>
                                         <TextInput
@@ -1963,12 +1999,33 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        marginBottom: 4,
+        marginBottom: 10,
+        marginTop: 8,
+        borderColor: '#93c5fd',
+        backgroundColor: '#eff6ff',
     },
     photoThemeButtonText: {
         color: '#2563eb',
-        fontWeight: '600',
+        fontWeight: '700',
         fontSize: 14,
+    },
+    aiOnlyHeaderRow: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        marginTop: 4,
+        marginBottom: 2,
+    },
+    aiOnlyChip: {
+        fontSize: 11,
+        color: '#1d4ed8',
+        backgroundColor: '#dbeafe',
+        borderColor: '#93c5fd',
+        borderWidth: 1,
+        borderRadius: 999,
+        paddingHorizontal: 10,
+        paddingVertical: 3,
+        overflow: 'hidden',
+        fontWeight: '700',
     },
     taskCard: {
         marginTop: 12,
@@ -2665,7 +2722,7 @@ const styles = StyleSheet.create({
     },
     cropModalRoot: {
         flex: 1,
-        backgroundColor: '#000',
+        backgroundColor: '#020617',
     },
     cropModalHeader: {
         position: 'absolute',
@@ -2674,11 +2731,32 @@ const styles = StyleSheet.create({
         right: 0,
         zIndex: 10,
         paddingHorizontal: 20,
-        paddingTop: Platform.OS === 'ios' ? 60 : 28,
-        paddingBottom: 16,
-        backgroundColor: 'rgba(0,0,0,0.55)',
+        paddingTop: Platform.OS === 'ios' ? 62 : 30,
+        paddingBottom: 14,
+        backgroundColor: 'rgba(2,6,23,0.68)',
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.1)',
+        borderBottomColor: 'rgba(96,165,250,0.28)',
+    },
+    cropTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    cropTitleBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        borderWidth: 1,
+        borderColor: 'rgba(147,197,253,0.5)',
+        backgroundColor: 'rgba(37,99,235,0.28)',
+        borderRadius: 999,
+        paddingVertical: 3,
+        paddingHorizontal: 8,
+    },
+    cropTitleBadgeText: {
+        fontSize: 11,
+        color: '#bfdbfe',
+        fontWeight: '700',
     },
     cropModalClose: {
         width: 40,
@@ -2687,10 +2765,10 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     cropModalTitle: {
-        fontSize: 22,
-        color: '#ffffff',
-        fontWeight: '700',
-        letterSpacing: 0.5,
+        fontSize: 24,
+        color: '#eff6ff',
+        fontWeight: '800',
+        letterSpacing: 0.7,
     },
     cropModalSubtitle: {
         fontSize: 12,
