@@ -60,6 +60,7 @@ export async function POST(req: NextRequest) {
     // 料金計算とターミナル出力 (gpt-4o)
     // - Input: $2.50 / 1M tokens
     // - Output: $10.00 / 1M tokens
+    let costDetails = null
     if (completion.usage) {
       const promptTokens = completion.usage.prompt_tokens
       const completionTokens = completion.usage.completion_tokens
@@ -71,6 +72,14 @@ export async function POST(req: NextRequest) {
 
       // 1ドル = 155円として概算
       const totalCostJPY = totalCostUSD * 155
+
+      costDetails = {
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        totalCostUSD,
+        totalCostJPY,
+      }
 
       console.log('====================================')
       console.log('[Theme Extraction] API Usage & Cost')
@@ -98,7 +107,7 @@ export async function POST(req: NextRequest) {
       .map((t) => t.trim())
       .slice(0, MAX_THEMES)
 
-    return NextResponse.json({ themes })
+    return NextResponse.json({ themes, costDetails })
   } catch (error) {
     console.error('theme-from-image API error:', error)
     const message = error instanceof Error ? error.message : 'server error'

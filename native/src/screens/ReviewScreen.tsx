@@ -261,7 +261,7 @@ export function ReviewScreen() {
             const next = applyCropDrag(ref.start, ref.handle, dXRel, dYRel)
             setCropRect(next)
         },
-        onPanResponderRelease: () => {},
+        onPanResponderRelease: () => { },
     }), [])
 
     const loadTasks = async () => {
@@ -414,6 +414,15 @@ export function ReviewScreen() {
                 throw new Error(`${message}\nURL: ${themeFromImageEndpoint}`)
             }
             const data = await res.json()
+            if (data.costDetails) {
+                console.log('\n====================================')
+                console.log('📸 [Theme Extraction] API Usage & Cost')
+                console.log(`Model: gpt-4o`)
+                console.log(`Tokens: ${data.costDetails.totalTokens} (Input: ${data.costDetails.promptTokens}, Output: ${data.costDetails.completionTokens})`)
+                console.log(`Cost (USD): $${data.costDetails.totalCostUSD.toFixed(5)}`)
+                console.log(`Cost (JPY): 約 ${data.costDetails.totalCostJPY.toFixed(2)} 円`)
+                console.log('====================================\n')
+            }
             const themes: string[] = Array.isArray(data.themes) ? data.themes : []
             const slots = themes.slice(0, 5).map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
             while (slots.length < 5) slots.push('')
