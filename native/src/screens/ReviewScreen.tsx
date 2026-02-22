@@ -23,7 +23,8 @@ import * as ImagePicker from 'expo-image-picker'
 import { manipulateAsync as imageManipulateAsync, SaveFormat as ImageSaveFormat } from 'expo-image-manipulator'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { Image } from 'react-native'
-import type { ReferenceBook } from '../types'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import type { ReferenceBook, ReviewMaterial } from '../types'
 
 const CROP_HANDLE_SIZE = 24
 const CROP_EDGE_HIT = 14
@@ -56,6 +57,13 @@ type QuizState = {
     themes: Record<string, ThemeQuizState>
 }
 
+type PersistedReviewProgress = {
+    skippedThemes: Record<string, string[]>
+    completedThemesInTask: Record<string, string[]>
+}
+
+const getReviewProgressStorageKey = (id: string) => `review-progress:${id}`
+
 export function ReviewScreen() {
     const { userId } = useProfile()
     const [reviewTasks, setReviewTasks] = useState<ReviewTask[]>([])
@@ -71,6 +79,13 @@ export function ReviewScreen() {
     const [editingThemeKey, setEditingThemeKey] = useState<string | null>(null)
     const [editingThemeText, setEditingThemeText] = useState<string>('')
     const [loading, setLoading] = useState(true)
+    const [showFutureModal, setShowFutureModal] = useState(false)
+    const [futureTasks, setFutureTasks] = useState<any[]>([])
+    const [futureTasksLoading, setFutureTasksLoading] = useState(false)
+    const [showContentModal, setShowContentModal] = useState(false)
+    const [contentMaterials, setContentMaterials] = useState<(ReviewMaterial & { study_date?: string | null })[]>([])
+    const [editingContentTheme, setEditingContentTheme] = useState<{ materialId: string; lineIndex: number } | null>(null)
+    const [editContentThemeText, setEditContentThemeText] = useState('')
 
     // Creation modal states
     const [showCreateModal, setShowCreateModal] = useState(false)
@@ -343,7 +358,7 @@ export function ReviewScreen() {
         setLoading(true)
         const { data, error } = await supabase
             .from('review_tasks')
-            .select('id, due_at, status, study_log_id, review_material_id, study_logs(note, subject, started_at, reference_book_id), review_materials(content, subject, reference_book_id, created_at, sm2_interval, sm2_ease_factor, sm2_repetitions)')
+            .select('id, due_at, status, study_log_id, review_material_id, study_logs(note, subject, started_at, reference_book_id), review_materials(content, subject, reference_book_id, created_at, study_date, sm2_interval, sm2_ease_factor, sm2_repetitions)')
             .eq('user_id', userId)
             .eq('status', 'pending')
             .lte('due_at', new Date().toISOString())
@@ -358,7 +373,7 @@ export function ReviewScreen() {
                     note: rm.content,
                     subject: rm.subject,
                     reference_book_id: rm.reference_book_id,
-                    started_at: rm.created_at
+                    started_at: rm.study_date || rm.created_at
                 } : sl
 
                 return {
@@ -384,10 +399,237 @@ export function ReviewScreen() {
         setLoading(false)
     }
 
+    const loadFutureTasks = async () => {
+        const { data: tasksData, error: tasksError } = await supabase
+            .from('review_tasks')
+            .select('id, due_at, status, study_log_id, review_material_id')
+            .eq('user_id', userId)
+            .eq('status', 'pending')
+            .gt('due_at', new Date().toISOString())
+            .order('due_at', { ascending: true })
+
+        if (tasksError) {
+            setFutureTasks([])
+            return
+        }
+
+        const tasks = (tasksData || []) as any[]
+        if (tasks.length === 0) {
+            setFutureTasks([])
+            return
+        }
+
+        const studyLogIds = Array.from(new Set(tasks.map((t) => t.study_log_id).filter(Boolean)))
+        const materialIds = Array.from(new Set(tasks.map((t) => t.review_material_id).filter(Boolean)))
+
+        const studyLogMap = new Map<string, any>()
+        if (studyLogIds.length > 0) {
+            const { data: logsData } = await supabase
+                .from('study_logs')
+                .select('id, note, subject, started_at, reference_book_id')
+                .in('id', studyLogIds as string[])
+            ; (logsData || []).forEach((log: any) => {
+                studyLogMap.set(log.id, log)
+            })
+        }
+
+        const materialMap = new Map<string, any>()
+        if (materialIds.length > 0) {
+            const { data: materialsData } = await supabase
+                .from('review_materials')
+                .select('id, content, subject, reference_book_id, created_at, study_date')
+                .in('id', materialIds as string[])
+            ; (materialsData || []).forEach((m: any) => {
+                materialMap.set(m.id, m)
+            })
+        }
+
+        const normalized = tasks.map((task) => {
+            const rm = task.review_material_id ? (materialMap.get(task.review_material_id) ?? null) : null
+            const sl = task.study_log_id ? (studyLogMap.get(task.study_log_id) ?? null) : null
+            const effectiveLog = rm ? {
+                note: rm.content,
+                subject: rm.subject,
+                reference_book_id: rm.reference_book_id,
+                started_at: rm.study_date || rm.created_at,
+            } : sl
+            return { ...task, study_logs: effectiveLog, review_materials: rm }
+        })
+
+        setFutureTasks(normalized)
+    }
+
     useEffect(() => {
         loadTasks()
+        loadFutureTasks()
     }, [userId])
 
+    // テーマの進捗（スキップ/完了）を端末に保存して、再ログイン後も維持する
+    useEffect(() => {
+        setSkippedThemes({})
+        setCompletedThemesInTask({})
+        if (!userId) return
+        let active = true
+        ; (async () => {
+            try {
+                const raw = await AsyncStorage.getItem(getReviewProgressStorageKey(userId))
+                if (!active || !raw) return
+                const parsed = JSON.parse(raw) as Partial<PersistedReviewProgress>
+                if (parsed.skippedThemes && typeof parsed.skippedThemes === 'object') {
+                    setSkippedThemes(parsed.skippedThemes)
+                }
+                if (parsed.completedThemesInTask && typeof parsed.completedThemesInTask === 'object') {
+                    setCompletedThemesInTask(parsed.completedThemesInTask)
+                }
+            } catch {
+                // ignore storage parse/read errors
+            }
+        })()
+        return () => { active = false }
+    }, [userId])
+
+    // 進捗状態の永続化
+    useEffect(() => {
+        if (!userId) return
+        const payload: PersistedReviewProgress = { skippedThemes, completedThemesInTask }
+        AsyncStorage.setItem(getReviewProgressStorageKey(userId), JSON.stringify(payload)).catch(() => {
+            // ignore storage write errors
+        })
+    }, [userId, skippedThemes, completedThemesInTask])
+
+    // 既に存在しないタスクIDの進捗は自動で掃除する
+    useEffect(() => {
+        const validTaskIds = new Set(reviewTasks.map((t) => t.id))
+        const pruneByTask = (prev: Record<string, string[]>) => {
+            let changed = false
+            const next: Record<string, string[]> = {}
+            Object.entries(prev).forEach(([taskId, themes]) => {
+                if (!validTaskIds.has(taskId)) {
+                    changed = true
+                    return
+                }
+                const normalized = Array.from(new Set((themes || []).filter(Boolean)))
+                if (normalized.length === 0) {
+                    changed = true
+                    return
+                }
+                if (normalized.length !== (themes || []).length) {
+                    changed = true
+                }
+                next[taskId] = normalized
+            })
+            return changed ? next : prev
+        }
+        setSkippedThemes(pruneByTask)
+        setCompletedThemesInTask(pruneByTask)
+    }, [reviewTasks])
+
+    // 明日以降の復習予定モーダルを開いたときに最新を取得
+    useEffect(() => {
+        if (showFutureModal) {
+            setFutureTasksLoading(true)
+            loadFutureTasks().finally(() => setFutureTasksLoading(false))
+        }
+    }, [showFutureModal])
+
+    const loadContentMaterials = async () => {
+        const { data, error } = await supabase
+            .from('review_materials')
+            .select('*')
+            .eq('user_id', userId)
+            .order('study_date', { ascending: false })
+        if (!error) {
+            let list = (data || []) as (ReviewMaterial & { study_date?: string | null })[]
+            if (selectedSubjectKey) {
+                const bookMatch = selectedSubjectKey.startsWith('book:')
+                const bookId = bookMatch ? selectedSubjectKey.slice(5) : null
+                if (bookId) {
+                    list = list.filter((m) => m.reference_book_id === bookId)
+                } else {
+                    const subject = selectedSubjectKey.startsWith('subject:') ? selectedSubjectKey.slice(8) : selectedSubjectKey
+                    list = list.filter((m) => (m.subject || 'その他') === subject)
+                }
+            }
+            setContentMaterials(list)
+        }
+    }
+
+    useEffect(() => {
+        if (showContentModal) loadContentMaterials()
+    }, [showContentModal, selectedSubjectKey])
+
+    const stripThemeBullet = (s: string) => (s || '').replace(/^[・•\-*]\s*/, '').trim()
+
+    const saveContentThemeEdit = async () => {
+        if (!editingContentTheme || editContentThemeText === undefined) return
+        const { materialId, lineIndex } = editingContentTheme
+        const material = contentMaterials.find((m) => m.id === materialId)
+        if (!material) return
+        let lines = (material.content || '').split('\n')
+        if (lines.length === 0) lines = ['']
+        if (lineIndex < 0 || lineIndex >= lines.length) return
+        lines[lineIndex] = editContentThemeText.trim()
+        const newContent = lines.join('\n')
+        const { error } = await supabase.from('review_materials').update({ content: newContent }).eq('id', materialId)
+        if (!error) {
+            setContentMaterials((prev) => prev.map((m) => (m.id === materialId ? { ...m, content: newContent } : m)))
+            setEditingContentTheme(null)
+            setEditContentThemeText('')
+            loadTasks()
+            loadFutureTasks()
+        } else {
+            Alert.alert('エラー', '保存に失敗しました')
+        }
+    }
+
+    const deleteContentMaterial = (material: ReviewMaterial & { study_date?: string | null }) => {
+        Alert.alert(
+            '記録を削除',
+            'この学習記録を削除しますか？明日以降の復習予定からも消えます。',
+            [
+                { text: 'キャンセル', style: 'cancel' },
+                {
+                    text: '削除',
+                    style: 'destructive',
+                    onPress: async () => {
+                        const { error } = await supabase.from('review_materials').delete().eq('id', material.id)
+                        if (error) {
+                            Alert.alert('エラー', '削除に失敗しました')
+                        } else {
+                            setContentMaterials((prev) => prev.filter((m) => m.id !== material.id))
+                            loadTasks()
+                            loadFutureTasks()
+                        }
+                    },
+                },
+            ]
+        )
+    }
+
+    const deleteContentTheme = (material: ReviewMaterial & { study_date?: string | null }, lineIndex: number) => {
+        let lines = (material.content || '').split('\n')
+        if (lines.length === 0) lines = ['']
+        if (lineIndex < 0 || lineIndex >= lines.length) return
+        lines.splice(lineIndex, 1)
+        const newContent = lines.filter((l) => l.trim()).join('\n')
+        if (!newContent.trim()) {
+            supabase.from('review_materials').delete().eq('id', material.id).then(({ error }) => {
+                if (!error) {
+                    setContentMaterials((prev) => prev.filter((m) => m.id !== material.id))
+                    loadTasks()
+                    loadFutureTasks()
+                } else Alert.alert('エラー', '削除に失敗しました')
+            })
+            return
+        }
+        supabase.from('review_materials').update({ content: newContent }).eq('id', material.id).then(({ error }) => {
+            if (!error) {
+                setContentMaterials((prev) => prev.map((m) => (m.id === material.id ? { ...m, content: newContent } : m)))
+                loadTasks()
+                loadFutureTasks()
+            } else Alert.alert('エラー', '更新に失敗しました')
+        })
+    }
 
     // Extracted loadBooks function for reusability
     const loadBooks = async () => {
@@ -723,6 +965,14 @@ export function ReviewScreen() {
         return `${formatDateLabel(studyDate)}(${diffDays}日前)`
     }
 
+    // 本来の期日（due_at）から何日遅れているかを返す（当日は0、遅れていない場合は0）
+    const getOverdueDays = (dueAt?: string | null): number => {
+        if (!dueAt) return 0
+        const dueDay = getStudyDayDate(getStudyDay(new Date(dueAt)))
+        const today = getStudyDayDate(getStudyDay(new Date()))
+        return Math.max(0, Math.round((today.getTime() - dueDay.getTime()) / 86400000))
+    }
+
     const parseFlashcard = (text: string): { question: string; answer: string | null } => {
         const parts = text.split(' : ')
         if (parts.length === 2) {
@@ -783,24 +1033,44 @@ export function ReviewScreen() {
         const result = calculateSM2(worstRating, currentState)
         const nextDueDate = getNextDueDate(result.nextDueDays)
 
-        await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', taskId)
+        const { error: updateError } = await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', taskId)
+        if (updateError) {
+            setCompletedThemesInTask((prev) => ({
+                ...prev,
+                [taskId]: (prev[taskId] || []).filter((t) => t !== theme),
+            }))
+            setThemeRatingsInTask((prev) => {
+                const next = { ...prev }
+                delete next[getThemeKey(taskId, theme)]
+                return next
+            })
+            Alert.alert('エラー', '復習の完了に失敗しました。もう一度お試しください。')
+            return
+        }
         if (materialId) {
-            await supabase.from('review_materials').update({
+            const { error: matError } = await supabase.from('review_materials').update({
                 sm2_interval: result.interval,
                 sm2_ease_factor: result.easeFactor,
                 sm2_repetitions: result.repetitions,
             }).eq('id', materialId)
+            if (matError) {
+                Alert.alert('エラー', '復習記録の更新に失敗しました。')
+                return
+            }
             await supabase.from('review_tasks')
                 .delete()
                 .eq('review_material_id', materialId)
                 .eq('status', 'pending')
                 .gt('due_at', new Date().toISOString())
-            await supabase.from('review_tasks').insert({
+            const { error: insertError } = await supabase.from('review_tasks').insert({
                 user_id: userId,
                 review_material_id: materialId,
                 due_at: nextDueDate.toISOString(),
                 status: 'pending',
             })
+            if (insertError) {
+                Alert.alert('エラー', '次回復習予定の登録に失敗しました。')
+            }
         }
 
         setCompletedThemesInTask((prev) => { const next = { ...prev }; delete next[taskId]; return next })
@@ -810,6 +1080,8 @@ export function ReviewScreen() {
             return next
         })
         setReviewTasks((prev) => prev.filter((t) => t.id !== taskId))
+        loadTasks()
+        loadFutureTasks()
     }
 
 
@@ -1108,6 +1380,7 @@ export function ReviewScreen() {
                 subject: subject,
                 content: noteValue,
                 reference_book_id: selectedBookId || null,
+                study_date: startedAtIso,
             })
             .select()
             .single()
@@ -1140,6 +1413,7 @@ export function ReviewScreen() {
         setShowCreateModal(false)
         setCreateMode('ai')
         loadTasks()
+        loadFutureTasks()
     }
 
     // DEBUG: Log tasks and groups
@@ -1238,11 +1512,60 @@ export function ReviewScreen() {
     }, [selectedSubjectKey, groupedTasks])
 
 
+    // 同じ (subject, theme) は一番直近の復習日だけ表示する
+    const groupedFutureTasks = useMemo(() => {
+        const todayStudyDay = getStudyDay(new Date())
+        const todayDate = getStudyDayDate(todayStudyDay)
+        const themeToNearest: Record<string, { subject: string; theme: string; startedAt: string | null; dueAt: string; dueStudyDay: string; dateLabel: string; relativeLabel: string }> = {}
+
+        futureTasks.forEach((task) => {
+            if (selectedSubjectKey) {
+                const bookId = task.study_logs?.reference_book_id
+                const subject = task.study_logs?.subject || 'その他'
+                const taskKey = bookId ? `book:${bookId}` : `subject:${subject}`
+                if (taskKey !== selectedSubjectKey) return
+            }
+
+            const subject = task.study_logs?.subject || 'その他'
+            let themes = splitThemes(task.study_logs?.note || '')
+            if (themes.length === 0) themes = ['全体復習']
+            const dueAt = task.due_at
+            const dueStudyDay = getStudyDay(new Date(dueAt))
+            const dueDate = getStudyDayDate(dueStudyDay)
+            const diffDays = Math.round((dueDate.getTime() - todayDate.getTime()) / 86400000)
+            const relativeLabel = diffDays === 1 ? '明日' : diffDays === 2 ? '明後日' : `${diffDays}日後`
+            const dateLabel = formatDateLabel(dueDate)
+            const startedAt = task.study_logs?.started_at ?? null
+
+            themes.forEach((theme) => {
+                const key = `${subject}\n${theme}`
+                const existing = themeToNearest[key]
+                if (!existing || dueAt < existing.dueAt) {
+                    themeToNearest[key] = { subject, theme, startedAt, dueAt, dueStudyDay, dateLabel, relativeLabel }
+                }
+            })
+        })
+
+        const groups: Record<string, { date: string; dateLabel: string; relativeLabel: string; themes: { subject: string; theme: string; startedAt: string | null }[] }> = {}
+        Object.values(themeToNearest).forEach(({ subject, theme, startedAt, dueStudyDay, dateLabel, relativeLabel }) => {
+            if (!groups[dueStudyDay]) {
+                groups[dueStudyDay] = {
+                    date: dueStudyDay,
+                    dateLabel,
+                    relativeLabel,
+                    themes: [],
+                }
+            }
+            groups[dueStudyDay].themes.push({ subject, theme, startedAt })
+        })
+        return Object.values(groups).sort((a, b) => a.date.localeCompare(b.date))
+    }, [futureTasks, selectedSubjectKey])
+
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
             <View style={styles.card}>
-                <View style={styles.headerRow}>
-                    <View>
+                <View style={styles.cardHeaderColumn}>
+                    <View style={[styles.headerTitleWrap, styles.headerTitleWrapTop]}>
                         <Text style={styles.cardTitle}>復習カード</Text>
                         <Text style={styles.cardSubtitle}>
                             {(selectedSubjectKey)
@@ -1250,16 +1573,26 @@ export function ReviewScreen() {
                                 : '忘却曲線に合わせて今日の復習を出題します'}
                         </Text>
                     </View>
-                    {(selectedSubjectKey) ? (
-                        <Pressable style={styles.backButton} onPress={() => setSelectedSubjectKey(null)}>
-                            <Text style={styles.backButtonText}>戻る</Text>
+                    <View style={styles.headerButtons} pointerEvents="box-none">
+                        <Pressable style={styles.contentButton} onPress={() => setShowContentModal(true)}>
+                            <Ionicons name="document-text-outline" size={18} color="#64748b" />
+                            <Text style={styles.contentButtonText}>内容</Text>
                         </Pressable>
-                    ) : (
-                        <Pressable style={styles.createButton} onPress={() => setShowCreateModal(true)}>
-                            <Ionicons name="add-circle" size={20} color="#ffffff" />
-                            <Text style={styles.createButtonText}>作成</Text>
+                        <Pressable style={styles.futureButton} onPress={() => setShowFutureModal(true)}>
+                            <Ionicons name="calendar-outline" size={18} color="#3b82f6" />
+                            <Text style={styles.futureButtonText}>予定</Text>
                         </Pressable>
-                    )}
+                        {(selectedSubjectKey) ? (
+                            <Pressable style={styles.backButton} onPress={() => setSelectedSubjectKey(null)}>
+                                <Text style={styles.backButtonText}>戻る</Text>
+                            </Pressable>
+                        ) : (
+                            <Pressable style={styles.createButton} onPress={() => setShowCreateModal(true)}>
+                                <Ionicons name="add-circle" size={20} color="#ffffff" />
+                                <Text style={styles.createButtonText}>作成</Text>
+                            </Pressable>
+                        )}
+                    </View>
                 </View>
                 {(loading || (groupedTasks.length === 0 && !loading)) ? (
                     <>
@@ -1338,7 +1671,14 @@ export function ReviewScreen() {
                                                     <View key={`${task.id}-${index}`} style={styles.themeCard}>
                                                         <View style={styles.themeHeader}>
                                                             <Text style={styles.themeTitle}>{task.study_logs?.subject || '学習内容'}</Text>
-                                                            <Text style={styles.mutedText}>{formatReviewDate(task.study_logs?.started_at)}</Text>
+                                                            <View style={styles.themeHeaderRight}>
+                                                                <Text style={styles.mutedText}>{formatReviewDate(task.study_logs?.started_at)}</Text>
+                                                                {getOverdueDays(task.due_at) > 0 && (
+                                                                    <View style={styles.overdueBadge}>
+                                                                        <Text style={styles.overdueBadgeText}>⚠️ {getOverdueDays(task.due_at)}日遅れ</Text>
+                                                                    </View>
+                                                                )}
+                                                            </View>
                                                         </View>
                                                         <Text style={styles.mutedText}>{theme}</Text>
                                                         <View style={styles.difficultyRow}>
@@ -1577,6 +1917,162 @@ export function ReviewScreen() {
                     </>
                 )}
             </View>
+
+            {/* 明日以降の復習予定モーダル */}
+            <Modal
+                visible={showFutureModal}
+                animationType="slide"
+                transparent={false}
+                onRequestClose={() => setShowFutureModal(false)}
+            >
+                <View style={styles.futureModalRoot}>
+                    <ScrollView style={styles.futureModalBody} contentContainerStyle={styles.futureModalBodyContent} showsVerticalScrollIndicator={false}>
+                        <View style={styles.futureModalHeader}>
+                            <View style={styles.futureModalTitleRow}>
+                                <View style={styles.futureModalTitleIcon}>
+                                    <Ionicons name="calendar" size={22} color="#3b82f6" />
+                                </View>
+                                <Text style={styles.futureModalTitle}>明日以降の復習予定</Text>
+                            </View>
+                            <Pressable onPress={() => setShowFutureModal(false)} style={styles.futureModalCloseButton} hitSlop={12}>
+                                <Ionicons name="close" size={24} color="#64748b" />
+                            </Pressable>
+                        </View>
+                        {futureTasksLoading ? (
+                            <View style={styles.futureEmptyState}>
+                                <Text style={styles.futureEmptyText}>読み込み中...</Text>
+                            </View>
+                        ) : groupedFutureTasks.length === 0 ? (
+                            <View style={styles.futureEmptyState}>
+                                <View style={styles.futureEmptyIconWrap}>
+                                    <Ionicons name="checkmark-done-circle" size={52} color="#3b82f6" />
+                                </View>
+                                <Text style={styles.futureEmptyText}>明日以降の復習予定はありません</Text>
+                                <Text style={styles.futureEmptySubtext}>復習を完了するとここに予定が追加されます</Text>
+                            </View>
+                        ) : (
+                            groupedFutureTasks.map((group) => (
+                                <View key={group.date} style={styles.futureDateGroup}>
+                                    <View style={styles.futureDateHeader}>
+                                        <View style={styles.futureDateHeaderLeft}>
+                                            <Ionicons name="time-outline" size={16} color="#64748b" />
+                                            <Text style={styles.futureDateLabel}>{group.dateLabel}</Text>
+                                        </View>
+                                        <View style={styles.futureCountBadge}>
+                                            <Text style={styles.futureCountText}>{group.relativeLabel}</Text>
+                                        </View>
+                                    </View>
+                                    {group.themes.map((item, idx) => (
+                                        <View key={`${group.date}-${idx}`} style={[styles.futureThemeRow, idx === 0 && styles.futureThemeRowFirst]}>
+                                            <Text style={styles.futureSubjectText} numberOfLines={1}>{item.subject}</Text>
+                                            <Text style={styles.futureThemeText} numberOfLines={3}>
+                                                {item.theme}{item.startedAt ? `（${formatDateLabel(getStudyDayDate(getStudyDay(new Date(item.startedAt))))}）` : ''}
+                                            </Text>
+                                        </View>
+                                    ))}
+                                </View>
+                            ))
+                        )}
+                    </ScrollView>
+                </View>
+            </Modal>
+
+            {/* 学習内容の確認・編集モーダル */}
+            <Modal
+                visible={showContentModal}
+                animationType="slide"
+                transparent={false}
+                onRequestClose={() => {
+                    setShowContentModal(false)
+                    setEditingContentTheme(null)
+                }}
+            >
+                <KeyboardAvoidingView style={styles.contentModalRoot} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                    <ScrollView style={styles.contentModalBody} contentContainerStyle={styles.contentModalBodyContent} keyboardShouldPersistTaps="handled">
+                        <View style={styles.contentModalHeader}>
+                            <Text style={styles.contentModalTitle}>学習内容の確認・編集</Text>
+                            <Pressable onPress={() => { setShowContentModal(false); setEditingContentTheme(null) }} style={styles.contentModalClose} hitSlop={12}>
+                                <Ionicons name="close" size={24} color="#64748b" />
+                            </Pressable>
+                        </View>
+                        {contentMaterials.length === 0 ? (
+                            <View style={styles.contentEmptyState}>
+                                <Ionicons name="document-text-outline" size={48} color="#cbd5e1" />
+                                <Text style={styles.contentEmptyText}>学習内容がありません</Text>
+                                <Text style={styles.contentEmptySubtext}>復習カードを作成するとここに表示されます</Text>
+                            </View>
+                        ) : (
+                            contentMaterials.map((material) => {
+                                let lines = (material.content || '').split('\n')
+                                if (lines.length === 0) lines = ['']
+                                const themesWithIndex: { theme: string; lineIndex: number }[] = []
+                                lines.forEach((line, i) => {
+                                    const t = line.trim()
+                                    if (t) themesWithIndex.push({ theme: t, lineIndex: i })
+                                })
+                                if (themesWithIndex.length === 0) themesWithIndex.push({ theme: '全体復習', lineIndex: 0 })
+                                const studyDateLabel = material.study_date
+                                    ? formatDateLabel(new Date(material.study_date))
+                                    : (material.created_at ? formatDateLabel(new Date(material.created_at)) : '—')
+                                return (
+                                    <View key={material.id} style={styles.contentCard}>
+                                        <View style={styles.contentCardHeader}>
+                                            <Text style={styles.contentCardDate} numberOfLines={1}>{studyDateLabel}</Text>
+                                            <Text style={styles.contentCardSubject} numberOfLines={1}>{material.subject || 'その他'}</Text>
+                                            <Pressable onPress={() => deleteContentMaterial(material)} style={styles.contentCardDelete}>
+                                                <Ionicons name="trash-outline" size={20} color="#dc2626" />
+                                            </Pressable>
+                                        </View>
+                                        {themesWithIndex.map(({ theme, lineIndex }) => {
+                                            const isEditing = editingContentTheme?.materialId === material.id && editingContentTheme?.lineIndex === lineIndex
+                                            const displayTheme = stripThemeBullet(theme)
+                                            return (
+                                                <View key={`${material.id}-${lineIndex}`} style={styles.contentThemeRow}>
+                                                    {isEditing ? (
+                                                        <View style={styles.contentThemeEditRow}>
+                                                            <TextInput
+                                                                style={styles.contentThemeInput}
+                                                                value={editContentThemeText}
+                                                                onChangeText={setEditContentThemeText}
+                                                                autoFocus
+                                                                multiline
+                                                            />
+                                                            <View style={styles.contentThemeEditActions}>
+                                                                <Pressable style={styles.contentThemeSaveBtn} onPress={saveContentThemeEdit}>
+                                                                    <Text style={styles.contentThemeSaveText}>保存</Text>
+                                                                </Pressable>
+                                                                <Pressable style={styles.contentThemeCancelBtn} onPress={() => { setEditingContentTheme(null); setEditContentThemeText('') }}>
+                                                                    <Text style={styles.contentThemeCancelText}>キャンセル</Text>
+                                                                </Pressable>
+                                                            </View>
+                                                        </View>
+                                                    ) : (
+                                                        <View style={styles.contentThemeTextWrap}>
+                                                            <Pressable
+                                                                style={styles.contentThemeTextPressable}
+                                                                onPress={() => {
+                                                                    setEditingContentTheme({ materialId: material.id, lineIndex })
+                                                                    setEditContentThemeText(displayTheme)
+                                                                }}
+                                                            >
+                                                                <Text style={styles.contentThemeText} numberOfLines={2}>{displayTheme}</Text>
+                                                                <Ionicons name="pencil" size={14} color="#94a3b8" />
+                                                            </Pressable>
+                                                            <Pressable onPress={() => deleteContentTheme(material, lineIndex)} style={styles.contentThemeDelete} hitSlop={8}>
+                                                                <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                                                            </Pressable>
+                                                        </View>
+                                                    )}
+                                                </View>
+                                            )
+                                        })}
+                                    </View>
+                                )
+                            })
+                        )}
+                    </ScrollView>
+                </KeyboardAvoidingView>
+            </Modal>
 
             {/* 写真の範囲選択（切り取り）モーダル */}
             <Modal
@@ -2179,6 +2675,18 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         alignItems: 'flex-start',
         gap: 12,
+    },
+    cardHeaderColumn: {
+        flexDirection: 'column',
+        gap: 12,
+    },
+    headerTitleWrap: {
+        flex: 1,
+        minWidth: 100,
+        paddingRight: 8,
+    },
+    headerTitleWrapTop: {
+        flex: 0,
     },
     createButton: {
         flexDirection: 'row',
@@ -2872,5 +3380,322 @@ const styles = StyleSheet.create({
         fontSize: 17,
         fontWeight: '700',
         letterSpacing: 0.3,
+    },
+    themeHeaderRight: {
+        alignItems: 'flex-end',
+        gap: 4,
+    },
+    overdueBadge: {
+        backgroundColor: '#fff3e0',
+        borderWidth: 1,
+        borderColor: '#f97316',
+        borderRadius: 6,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+    },
+    overdueBadgeText: {
+        fontSize: 11,
+        color: '#ea580c',
+        fontWeight: '600',
+    },
+    headerButtons: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    contentButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        backgroundColor: '#f8fafc',
+    },
+    contentButtonText: {
+        color: '#64748b',
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    futureButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#3b82f6',
+        backgroundColor: '#eff6ff',
+    },
+    futureButtonText: {
+        color: '#3b82f6',
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    contentModalRoot: {
+        flex: 1,
+        backgroundColor: '#f1f5f9',
+    },
+    contentModalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingTop: Platform.OS === 'ios' ? 56 : 20,
+        paddingHorizontal: 20,
+        paddingBottom: 16,
+    },
+    contentModalTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#1e293b',
+    },
+    contentModalClose: {
+        padding: 4,
+    },
+    contentModalBody: {
+        flex: 1,
+    },
+    contentModalBodyContent: {
+        padding: 16,
+        paddingBottom: 40,
+    },
+    contentEmptyState: {
+        alignItems: 'center',
+        paddingTop: 60,
+        gap: 10,
+    },
+    contentEmptyText: {
+        fontSize: 16,
+        color: '#64748b',
+        fontWeight: '500',
+    },
+    contentEmptySubtext: {
+        fontSize: 14,
+        color: '#94a3b8',
+    },
+    contentCard: {
+        backgroundColor: '#ffffff',
+        borderRadius: 12,
+        padding: 14,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+    },
+    contentCardHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 10,
+        gap: 8,
+    },
+    contentCardDate: {
+        fontSize: 13,
+        color: '#64748b',
+        minWidth: 64,
+    },
+    contentCardSubject: {
+        flex: 1,
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#334155',
+    },
+    contentCardDelete: {
+        padding: 6,
+    },
+    contentThemeRow: {
+        marginTop: 6,
+        borderTopWidth: 1,
+        borderTopColor: '#f1f5f9',
+        paddingTop: 8,
+    },
+    contentThemeTextWrap: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+    },
+    contentThemeTextPressable: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    contentThemeDelete: {
+        padding: 4,
+    },
+    contentThemeText: {
+        fontSize: 14,
+        color: '#475569',
+        flex: 1,
+    },
+    contentThemeEditRow: {
+        gap: 8,
+    },
+    contentThemeInput: {
+        borderWidth: 1,
+        borderColor: '#cbd5e1',
+        borderRadius: 8,
+        padding: 10,
+        fontSize: 14,
+        backgroundColor: '#ffffff',
+        minHeight: 60,
+        textAlignVertical: 'top',
+    },
+    contentThemeEditActions: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    contentThemeSaveBtn: {
+        backgroundColor: '#2563eb',
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+    },
+    contentThemeSaveText: {
+        color: '#ffffff',
+        fontWeight: '600',
+        fontSize: 14,
+    },
+    contentThemeCancelBtn: {
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+    },
+    contentThemeCancelText: {
+        color: '#64748b',
+        fontSize: 14,
+    },
+    futureModalRoot: {
+        flex: 1,
+        backgroundColor: '#f1f5f9',
+    },
+    futureModalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingTop: Platform.OS === 'ios' ? 56 : 20,
+        paddingHorizontal: 20,
+        paddingBottom: 18,
+    },
+    futureModalTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    futureModalTitleIcon: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: '#eff6ff',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    futureModalTitle: {
+        fontSize: 20,
+        fontWeight: '800',
+        color: '#1e293b',
+        letterSpacing: 0.3,
+    },
+    futureModalCloseButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#f1f5f9',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    futureModalBody: {
+        flex: 1,
+    },
+    futureModalBodyContent: {
+        paddingHorizontal: 16,
+        paddingTop: 0,
+        paddingBottom: 40,
+    },
+    futureEmptyState: {
+        alignItems: 'center',
+        paddingTop: 72,
+        gap: 14,
+    },
+    futureEmptyIconWrap: {
+        opacity: 0.9,
+    },
+    futureEmptyText: {
+        fontSize: 17,
+        fontWeight: '600',
+        color: '#64748b',
+    },
+    futureEmptySubtext: {
+        fontSize: 14,
+        color: '#94a3b8',
+    },
+    futureDateGroup: {
+        marginBottom: 16,
+        backgroundColor: '#ffffff',
+        borderRadius: 16,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        overflow: 'hidden',
+    },
+    futureDateHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+        paddingBottom: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#f1f5f9',
+    },
+    futureDateHeaderLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    futureDateLabel: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#1e293b',
+    },
+    futureCountBadge: {
+        backgroundColor: '#dbeafe',
+        borderRadius: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+    },
+    futureCountText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#2563eb',
+    },
+    futureThemeRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+        paddingVertical: 10,
+        borderTopWidth: 1,
+        borderTopColor: '#f1f5f9',
+    },
+    futureThemeRowFirst: {
+        borderTopWidth: 0,
+    },
+    futureSubjectText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#64748b',
+        minWidth: 56,
+        maxWidth: 80,
+    },
+    futureThemeText: {
+        fontSize: 14,
+        color: '#334155',
+        flex: 1,
+        lineHeight: 20,
+    },
+    futureStudyDateText: {
+        fontSize: 11,
+        color: '#94a3b8',
+        marginTop: 3,
     },
 })

@@ -75,7 +75,9 @@ export const startOfMonth = (date = new Date()) => {
 }
 
 export const formatDateLabel = (date: Date) => {
-  return date.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })
+  const { year, month, day } = getJstParts(date)
+  const yy = String(year).slice(-2)
+  return `${yy}/${month}/${day}`
 }
 
 export const formatDateInput = (date: Date) => {

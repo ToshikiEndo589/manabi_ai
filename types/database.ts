@@ -110,6 +110,7 @@ export interface Database {
           sm2_interval: number
           sm2_ease_factor: number
           sm2_repetitions: number
+          study_date: string | null
           created_at: string
           updated_at: string
         }
@@ -122,6 +123,7 @@ export interface Database {
           sm2_interval?: number
           sm2_ease_factor?: number
           sm2_repetitions?: number
+          study_date?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -134,6 +136,7 @@ export interface Database {
           sm2_interval?: number
           sm2_ease_factor?: number
           sm2_repetitions?: number
+          study_date?: string | null
           created_at?: string
           updated_at?: string
         }

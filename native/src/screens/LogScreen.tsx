@@ -24,7 +24,7 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { useProfile } from '../contexts/ProfileContext'
-import type { Profile, ReferenceBook, StudyLog, ReviewMaterial } from '../types'
+import type { Profile, ReferenceBook, StudyLog } from '../types'
 import { formatMinutes } from '../lib/format'
 import {
   formatDateInput,
@@ -118,14 +118,6 @@ export function LogScreen() {
   const [showAllMemoLogs, setShowAllMemoLogs] = useState(false)
 
   // 復習カードの修正
-  const [reviewMaterials, setReviewMaterials] = useState<ReviewMaterial[]>([])
-  const [showReviewCardsEdit, setShowReviewCardsEdit] = useState(false)
-  const [editingReviewCardId, setEditingReviewCardId] = useState<string | null>(null)
-  const [editCardSubject, setEditCardSubject] = useState('')
-  const [editCardContent, setEditCardContent] = useState('')
-  const [editCardBookId, setEditCardBookId] = useState<string | null>(null)
-  const [showReviewCardBookPicker, setShowReviewCardBookPicker] = useState(false)
-  const [savingReviewCard, setSavingReviewCard] = useState(false)
 
   const normalizePickerDate = (date: Date) => {
     // Reset to midnight local time to avoid confusion
@@ -144,7 +136,7 @@ export function LogScreen() {
 
   const loadData = async () => {
     setLoading(true)
-    const [logsResult, booksResult, profileResult, materialsResult] = await Promise.all([
+    const [logsResult, booksResult, profileResult] = await Promise.all([
       supabase
         .from('study_logs')
         .select('*')
@@ -161,11 +153,6 @@ export function LogScreen() {
         .select('*')
         .eq('user_id', userId)
         .single(),
-      supabase
-        .from('review_materials')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false }),
     ])
     if (logsResult.error) {
       Alert.alert('読み込みエラー', logsResult.error.message)
@@ -176,9 +163,6 @@ export function LogScreen() {
       Alert.alert('読み込みエラー', booksResult.error.message)
     } else {
       setReferenceBooks((booksResult.data || []) as ReferenceBook[])
-    }
-    if (!materialsResult.error && materialsResult.data) {
-      setReviewMaterials((materialsResult.data || []) as ReviewMaterial[])
     }
     if (!profileResult.error && profileResult.data) {
       setProfile(profileResult.data as Profile)
@@ -512,66 +496,6 @@ export function LogScreen() {
     )
   }
 
-  const openReviewCardEdit = (material: ReviewMaterial) => {
-    setEditingReviewCardId(material.id)
-    setEditCardBookId(material.reference_book_id || null)
-    setEditCardSubject(material.subject)
-    setEditCardContent(material.content)
-    setShowReviewCardBookPicker(false)
-  }
-
-  const cancelReviewCardEdit = () => {
-    setEditingReviewCardId(null)
-    setEditCardSubject('')
-    setEditCardContent('')
-    setEditCardBookId(null)
-  }
-
-  const saveReviewCardEdit = async () => {
-    if (!editingReviewCardId || !editCardContent.trim()) return
-    const book = referenceBooks.find((b) => b.id === editCardBookId)
-    const finalSubject = book ? book.name : (editCardSubject.trim() || 'その他')
-    setSavingReviewCard(true)
-    const { error } = await supabase
-      .from('review_materials')
-      .update({
-        reference_book_id: editCardBookId || null,
-        subject: finalSubject,
-        content: editCardContent.trim(),
-      })
-      .eq('id', editingReviewCardId)
-    setSavingReviewCard(false)
-    if (error) {
-      Alert.alert('更新エラー', error.message)
-    } else {
-      cancelReviewCardEdit()
-      await loadData()
-      Alert.alert('完了', '復習カードを更新しました。')
-    }
-  }
-
-  const deleteReviewCard = (material: ReviewMaterial) => {
-    Alert.alert(
-      '削除確認',
-      'この復習カードを削除しますか？紐づく復習スケジュールも削除されます。',
-      [
-        { text: 'キャンセル', style: 'cancel' },
-        {
-          text: '削除',
-          style: 'destructive',
-          onPress: async () => {
-            const { error } = await supabase.from('review_materials').delete().eq('id', material.id)
-            if (error) Alert.alert('エラー', '削除に失敗しました')
-            else {
-              setReviewMaterials((prev) => prev.filter((m) => m.id !== material.id))
-              await loadData()
-            }
-          },
-        },
-      ]
-    )
-  }
-
   const buildShareText = () => {
     const stats = `今日の学習: ${formatMinutes(summary.today)} / 今週: ${formatMinutes(summary.week)} / 今月: ${formatMinutes(
       summary.month
@@ -595,8 +519,6 @@ export function LogScreen() {
       Alert.alert('エラー', 'Xアプリを開けませんでした')
     }
   }
-
-
 
   const logsRangeTotals = useMemo(() => {
     const range =
@@ -1186,207 +1108,6 @@ export function LogScreen() {
           )}
         </View>
 
-        <View style={styles.card}>
-          <View style={styles.headerRow}>
-            <View>
-              <Text style={styles.sectionTitle}>学習内容</Text>
-              <Text style={styles.sectionSubtitle}>入力した内容をあとから見返せます</Text>
-            </View>
-            <Pressable style={styles.plusButton} onPress={() => setShowMemoLogs((prev) => !prev)}>
-              <Ionicons name={showMemoLogs ? 'remove' : 'add'} size={18} color="#334155" />
-            </Pressable>
-          </View>
-          {showMemoLogs && (
-            <>
-              {logsWithNotes.length === 0 ? (
-                <Text style={styles.mutedText}>まだメモがありません</Text>
-              ) : (
-                <ScrollView style={{ maxHeight: 600 }} nestedScrollEnabled>
-                  {logsWithNotes.map((log, index) => (
-                    <View key={`${log.subject}-${log.started_at}-${index}`} style={styles.logItem}>
-                      <View>
-                        <Text style={styles.logTitle}>
-                          {log.subject} / {formatMinutes(log.study_minutes)}
-                        </Text>
-                        <Text style={styles.mutedText}>{getStudyDay(new Date(log.started_at))}</Text>
-                        <Text style={styles.noteText}>{log.note}</Text>
-                      </View>
-                    </View>
-                  ))}
-                </ScrollView>
-              )}
-            </>
-          )}
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.headerRow}>
-            <View>
-              <Text style={styles.sectionTitle}>学習記録の修正</Text>
-              <Text style={styles.sectionSubtitle}>直近の記録を編集・削除できます</Text>
-            </View>
-            <Pressable style={styles.plusButton} onPress={() => setShowEditLogs((prev) => !prev)}>
-              <Ionicons name={showEditLogs ? 'remove' : 'add'} size={18} color="#334155" />
-            </Pressable>
-          </View>
-          {showEditLogs && (
-            <>
-              {groupedEditLogs.length === 0 && <Text style={styles.mutedText}>学習記録がありません</Text>}
-              <ScrollView style={{ maxHeight: 600 }} nestedScrollEnabled>
-                {groupedEditLogs.slice(0, 6).map((group) => (
-                  <View key={`${group.studyDay}-${group.subject}-${group.reference_book_id || 'none'}`} style={styles.logItem}>
-                    {editingLogIds.length > 0 && editingLogIds.includes(group.ids[0]) ? (
-                      <View>
-                        <Text style={styles.label}>教材</Text>
-                        <Pressable
-                          style={styles.selectTrigger}
-                          onPress={() => setShowEditBookModal((prev) => !prev)}
-                        >
-                          <Text style={styles.selectTriggerText}>
-                            {editBookId
-                              ? referenceBooks.find((b) => b.id === editBookId)?.name
-                              : '教材を選択'}
-                          </Text>
-                          <Ionicons name="chevron-down" size={20} color="#64748b" />
-                        </Pressable>
-                        {showEditBookModal && (
-                          <View style={styles.inlineDropdown}>
-                            {referenceBooks.map((item) => (
-                              <Pressable
-                                key={item.id}
-                                style={styles.dropdownItem}
-                                onPress={() => {
-                                  setEditBookId(item.id || null)
-                                  setShowEditBookModal(false)
-                                }}
-                              >
-                                <Text
-                                  style={[
-                                    styles.dropdownItemText,
-                                    editBookId === (item.id || null) && styles.dropdownItemTextSelected,
-                                  ]}
-                                >
-                                  {item.name}
-                                </Text>
-                                {editBookId === (item.id || null) && (
-                                  <Ionicons name="checkmark" size={20} color="#2563eb" />
-                                )}
-                              </Pressable>
-                            ))}
-                          </View>
-                        )}
-                        <Text style={styles.label}>科目名（自由入力）</Text>
-                        <TextInput style={styles.input} value={editSubject} onChangeText={setEditSubject} />
-                        <Text style={styles.label}>学習時間（分）</Text>
-                        <TextInput style={styles.input} value={editMinutes} onChangeText={setEditMinutes} keyboardType="numeric" />
-                        <Text style={styles.label}>学習日</Text>
-                        <TouchableOpacity
-                          style={styles.input}
-                          onPress={() => setShowEditDatePicker(true)}
-                        >
-                          <Text>{formatDateInput(editDate)}</Text>
-                        </TouchableOpacity>
-                        {showEditDatePicker && (
-                          <View style={{ width: '100%', overflow: 'hidden' }}>
-                            <View style={{ transform: [{ scale: 0.85 }], transformOrigin: 'left top' }}>
-                              <DateTimePicker
-                                value={editDate}
-                                mode="date"
-                                locale="ja-JP"
-                                display={RNPlatform.OS === 'ios' ? 'inline' : 'calendar'}
-                                onChange={(event, selectedDate) => {
-                                  if (selectedDate) setEditDate(normalizePickerDate(selectedDate))
-                                  setShowEditDatePicker(false)
-                                }}
-                              />
-                            </View>
-                          </View>
-                        )}
-
-                        <View style={styles.row}>
-                          <Pressable style={styles.primaryButton} onPress={saveEditLog}>
-                            <Text style={styles.primaryButtonText}>保存</Text>
-                          </Pressable>
-                          <Pressable style={styles.outlineButton} onPress={cancelEditLog}>
-                            <Text style={styles.outlineButtonText}>キャンセル</Text>
-                          </Pressable>
-                          <Pressable style={styles.deleteButton} onPress={() => deleteLogs(group.ids)}>
-                            <Text style={styles.deleteText}>削除</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    ) : (
-                      <View>
-                        <Text style={styles.mutedText}>
-                          {group.studyDay}
-                        </Text>
-                        <Text style={styles.logTitle}>
-                          {group.subject} / {formatMinutes(group.study_minutes)}
-                        </Text>
-                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                          <Pressable style={styles.outlineButton} onPress={() => startEditGroup(group)}>
-                            <Text style={styles.outlineButtonText}>編集</Text>
-                          </Pressable>
-                          <Pressable
-                            style={[styles.outlineButton, { borderColor: '#dc2626', backgroundColor: '#dc2626' }]}
-                            onPress={() => deleteGroup(group)}
-                          >
-                            <Text style={[styles.outlineButtonText, { color: '#ffffff' }]}>削除</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    )}
-                  </View>
-                ))}
-              </ScrollView>
-            </>
-          )}
-        </View>
-
-        {/* 復習カードの修正（学習記録の修正の下） */}
-        <View style={styles.card}>
-          <View style={styles.headerRow}>
-            <View>
-              <Text style={styles.sectionTitle}>復習カードの修正</Text>
-              <Text style={styles.sectionSubtitle}>過去の復習カードを一覧で編集・削除できます</Text>
-            </View>
-            <Pressable style={styles.plusButton} onPress={() => setShowReviewCardsEdit((prev) => !prev)}>
-              <Ionicons name={showReviewCardsEdit ? 'remove' : 'add'} size={18} color="#334155" />
-            </Pressable>
-          </View>
-          {showReviewCardsEdit && (
-            <>
-              {reviewMaterials.length === 0 ? (
-                <View style={styles.reviewCardsEmpty}>
-                  <Ionicons name="document-text-outline" size={40} color="#cbd5e1" />
-                  <Text style={styles.mutedText}>復習カードがありません</Text>
-                </View>
-              ) : (
-                <ScrollView style={styles.reviewCardsScroll} nestedScrollEnabled>
-                  {reviewMaterials.map((material) => (
-                    <View key={material.id} style={styles.reviewCardItem}>
-                      <View style={styles.reviewCardItemHeader}>
-                        <Text style={styles.reviewCardSubject} numberOfLines={1}>{material.subject}</Text>
-                        <View style={styles.reviewCardActions}>
-                          <Pressable onPress={() => openReviewCardEdit(material)} style={styles.reviewCardActionBtn}>
-                            <Ionicons name="pencil" size={18} color="#2563eb" />
-                            <Text style={styles.reviewCardActionText}>編集</Text>
-                          </Pressable>
-                          <Pressable onPress={() => deleteReviewCard(material)} style={[styles.reviewCardActionBtn, styles.reviewCardActionDelete]}>
-                            <Ionicons name="trash-outline" size={18} color="#dc2626" />
-                            <Text style={[styles.reviewCardActionText, { color: '#dc2626' }]}>削除</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                      <Text style={styles.reviewCardContent} numberOfLines={3}>{material.content}</Text>
-                    </View>
-                  ))}
-                </ScrollView>
-              )}
-            </>
-          )}
-        </View>
-
         {/* --- Home Screen Features (Merged) --- */}
         <View style={styles.divider} />
 
@@ -1570,77 +1291,6 @@ export function LogScreen() {
 
       </ScrollView>
 
-      {/* 復習カード編集モーダル */}
-      <Modal
-        visible={editingReviewCardId !== null}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={cancelReviewCardEdit}
-      >
-        <KeyboardAvoidingView style={styles.reviewCardModalContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.reviewCardModalHeader}>
-            <Text style={styles.reviewCardModalTitle}>復習カードを編集</Text>
-            <Pressable onPress={cancelReviewCardEdit} hitSlop={12}>
-              <Text style={styles.reviewCardModalCancel}>キャンセル</Text>
-            </Pressable>
-          </View>
-          <ScrollView style={styles.reviewCardModalBody} keyboardShouldPersistTaps="handled">
-            <Text style={styles.label}>教材・科目</Text>
-            <Pressable
-              style={styles.selectTrigger}
-              onPress={() => setShowReviewCardBookPicker((prev) => !prev)}
-            >
-              <Text style={styles.selectTriggerText}>
-                {editCardBookId ? referenceBooks.find((b) => b.id === editCardBookId)?.name : '教材を選択（任意）'}
-              </Text>
-              <Ionicons name={showReviewCardBookPicker ? 'chevron-up' : 'chevron-down'} size={20} color="#64748b" />
-            </Pressable>
-            {showReviewCardBookPicker && (
-              <View style={styles.inlineDropdown}>
-                <Pressable
-                  style={styles.dropdownItem}
-                  onPress={() => { setEditCardBookId(null); setShowReviewCardBookPicker(false) }}
-                >
-                  <Text style={[styles.dropdownItemText, editCardBookId === null && styles.dropdownItemTextSelected]}>教材なし（科目を手入力）</Text>
-                </Pressable>
-                {referenceBooks.map((item) => (
-                  <Pressable
-                    key={item.id}
-                    style={styles.dropdownItem}
-                    onPress={() => { setEditCardBookId(item.id || null); setShowReviewCardBookPicker(false) }}
-                  >
-                    <Text style={[styles.dropdownItemText, editCardBookId === (item.id || null) && styles.dropdownItemTextSelected]}>{item.name}</Text>
-                    {editCardBookId === (item.id || null) && <Ionicons name="checkmark" size={20} color="#2563eb" />}
-                  </Pressable>
-                ))}
-              </View>
-            )}
-            {!editCardBookId && (
-              <>
-                <Text style={styles.label}>科目名（自由入力）</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="例: 英語、数学"
-                  value={editCardSubject}
-                  onChangeText={setEditCardSubject}
-                />
-              </>
-            )}
-            <Text style={[styles.label, { marginTop: 12 }]}>内容・メモ</Text>
-            <TextInput
-              style={[styles.input, styles.reviewCardContentInput]}
-              placeholder="復習したい内容を入力"
-              value={editCardContent}
-              onChangeText={setEditCardContent}
-              multiline
-              textAlignVertical="top"
-            />
-            <Pressable style={styles.primaryButton} onPress={saveReviewCardEdit} disabled={savingReviewCard || !editCardContent.trim()}>
-              <Text style={styles.primaryButtonText}>{savingReviewCard ? '保存中...' : '保存'}</Text>
-            </Pressable>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </Modal>
     </KeyboardAvoidingView>
   )
 }

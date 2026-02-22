@@ -78,7 +78,7 @@ export function getNextDueDate(nextDueDays: number): Date {
     const jstMidnight = new Date(
         Date.UTC(jstNow.getUTCFullYear(), jstNow.getUTCMonth(), jstNow.getUTCDate())
     )
-    // 日本時間0時 = UTC前日15時 → JST補正して翌日の正確な0時を作る
+    // 日本時間0時 = UTC前日15時 → JSTの (today + nextDueDays) 0時をUTCで返す
     const baseMidnightUTC = jstMidnight.getTime() - 9 * 60 * 60 * 1000
-    return new Date(baseMidnightUTC + nextDueDays * 24 * 60 * 60 * 1000 + 9 * 60 * 60 * 1000)
+    return new Date(baseMidnightUTC + nextDueDays * 24 * 60 * 60 * 1000)
 }
