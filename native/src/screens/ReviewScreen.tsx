@@ -50,9 +50,15 @@ export function ReviewScreen() {
     const [reviewTasks, setReviewTasks] = useState<ReviewTask[]>([])
     const [quizByTask, setQuizByTask] = useState<Record<string, QuizState>>({})
     const [skippedThemes, setSkippedThemes] = useState<Record<string, string[]>>({})
+    /** 1タスク内で「完璧/うろ覚え/苦手」を押したテーマ（全テーマ終わるまでタスクは消さない） */
+    const [completedThemesInTask, setCompletedThemesInTask] = useState<Record<string, string[]>>({})
+    /** テーマごとの評価（全テーマ終了時に一番厳しい評価でSM-2を更新） */
+    const [themeRatingsInTask, setThemeRatingsInTask] = useState<Record<string, SM2Rating>>({})
     const [difficultyByTheme, setDifficultyByTheme] = useState<Record<string, Difficulty>>({})
     const [flashcardMode, setFlashcardMode] = useState<Record<string, boolean>>({})
     const [showingAnswer, setShowingAnswer] = useState<Record<string, boolean>>({})
+    const [editingThemeKey, setEditingThemeKey] = useState<string | null>(null)
+    const [editingThemeText, setEditingThemeText] = useState<string>('')
     const [loading, setLoading] = useState(true)
 
     // Creation modal states
@@ -79,10 +85,31 @@ export function ReviewScreen() {
     const endpoint = useMemo(() => {
         const direct = process.env.EXPO_PUBLIC_QA_ENDPOINT
         const base = process.env.EXPO_PUBLIC_API_BASE_URL
-        if (direct) return direct.replace(/\/api\/qa$/, '') + '/api/quiz'
+        try {
+            if (direct) {
+                const u = new URL(direct)
+                u.pathname = '/api/quiz'
+                u.search = ''
+                u.hash = ''
+                return u.toString()
+            }
+        } catch {
+            // fall through to base/env fallback
+        }
         if (base) return `${base.replace(/\/$/, '')}/api/quiz`
         return ''
     }, [])
+
+    const themeFromImageEndpoint = useMemo(() => {
+        const directTheme = process.env.EXPO_PUBLIC_THEME_FROM_IMAGE_ENDPOINT
+        if (directTheme) return directTheme
+        const base = process.env.EXPO_PUBLIC_API_BASE_URL
+        if (base) return `${base.replace(/\/$/, '')}/api/theme-from-image`
+        if (!endpoint) return ''
+        return endpoint.replace(/\/api\/quiz$/, '/api/theme-from-image')
+    }, [endpoint])
+
+    const [photoThemeLoading, setPhotoThemeLoading] = useState(false)
 
     const loadTasks = async () => {
         setLoading(true)
@@ -155,6 +182,71 @@ export function ReviewScreen() {
 
     }, [showCreateModal, userId])
 
+    const handlePhotoToThemes = async (useCamera: boolean) => {
+        if (!themeFromImageEndpoint) {
+            Alert.alert('設定エラー', 'APIのURLが設定されていません。')
+            return
+        }
+        const permission = useCamera
+            ? await ImagePicker.requestCameraPermissionsAsync()
+            : await ImagePicker.requestMediaLibraryPermissionsAsync()
+        if (permission.status !== 'granted') {
+            Alert.alert('権限が必要です', useCamera ? 'カメラの許可をしてください。' : '写真へのアクセスを許可してください。')
+            return
+        }
+        const launch = useCamera
+            ? () => ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.35, base64: true })
+            : () => ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.35, base64: true })
+        const result = await launch()
+        if (result.canceled || !result.assets?.[0]) return
+        const asset = result.assets[0]
+        if (!asset.base64) {
+            Alert.alert('エラー', '画像データの取得に失敗しました。もう一度お試しください。')
+            return
+        }
+        if (asset.base64.length > 2_500_000) {
+            Alert.alert('画像サイズが大きすぎます', '写真をトリミングするか、文字が読める範囲で近づいて再撮影してください。')
+            return
+        }
+        setPhotoThemeLoading(true)
+        try {
+            const res = await fetch(themeFromImageEndpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    imageBase64: asset.base64,
+                    mimeType: asset.mimeType || 'image/jpeg',
+                }),
+            })
+            if (!res.ok) {
+                const text = await res.text()
+                let message = 'テーマの抽出に失敗しました'
+                try {
+                    const err = JSON.parse(text)
+                    message = err.details || err.error || message
+                } catch {
+                    message = `${message} (HTTP ${res.status})`
+                    if (text) {
+                        message += `: ${text.slice(0, 120)}`
+                    }
+                }
+                throw new Error(`${message}\nURL: ${themeFromImageEndpoint}`)
+            }
+            const data = await res.json()
+            const themes: string[] = Array.isArray(data.themes) ? data.themes : []
+            const slots = themes.slice(0, 5).map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
+            while (slots.length < 5) slots.push('')
+            setAiNotes(slots)
+            setCreateMode('ai')
+            Alert.alert('完了', `${themes.length}件のテーマを抽出しました。内容を確認してから「作成」を押してください。`)
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : 'テーマの抽出に失敗しました'
+            Alert.alert('エラー', msg)
+        } finally {
+            setPhotoThemeLoading(false)
+        }
+    }
+
     const pickBookImage = async () => {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
         if (permission.status !== 'granted') {
@@ -162,7 +254,7 @@ export function ReviewScreen() {
             return
         }
         const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             allowsEditing: true, // Forces JPEG/PNG conversation
             quality: 0.8,
         })
@@ -358,44 +450,59 @@ export function ReviewScreen() {
     }
 
     /**
-     * SM-2: ユーザーの評価（完璧/うろ覚え/苦手）を受け取り、
-     * スケジュールを更新して次の復習タスクを1つ作成する
+     * SM-2: 1テーマずつ評価を記録。そのタスクの全テーマが終わったときだけDB更新・タスク削除する。
      */
     const handleSM2Rating = async (taskId: string, theme: string, rating: SM2Rating) => {
         const task = reviewTasks.find((t) => t.id === taskId)
         if (!task) return
 
+        const noteContent = task.review_materials?.content || task.study_logs?.note || ''
+        const allThemes = splitThemes(noteContent)
+        const themes = allThemes.length > 0 ? allThemes : ['全体復習']
+
+        // このテーマの評価を記録し、このテーマを「このタスク内で完了」に追加
+        setThemeRatingsInTask((prev) => ({ ...prev, [getThemeKey(taskId, theme)]: rating }))
+        setCompletedThemesInTask((prev) => ({
+            ...prev,
+            [taskId]: [...(prev[taskId] || []).filter((t) => t !== theme), theme],
+        }))
+
+        // 表示上はすぐ非表示にするため、completedThemesInTask でフィルタしているのでここで return すると
+        // まだ他テーマが残っているかどうかは state 更新後なので判定できない。次のレンダーで判定される。
+        // 全テーマ完了時だけ DB 更新したいので、同期的に「今の completed にこの theme を足した集合」で判定する。
+        const completedNow = [...(completedThemesInTask[taskId] || []).filter((t) => t !== theme), theme]
+        const allCompleted = themes.every((t) => completedNow.includes(t))
+
+        if (!allCompleted) {
+            return
+        }
+
+        // 全テーマ完了: 一番厳しい評価で SM-2 を更新（苦手 > うろ覚え > 完璧）
+        const ratings = themes.map((t) => (t === theme ? rating : themeRatingsInTask[getThemeKey(taskId, t)] ?? 'perfect'))
+        const worstRating: SM2Rating = ratings.some((r) => r === 'hard') ? 'hard' : ratings.some((r) => r === 'good') ? 'good' : 'perfect'
+
         const rm = task.review_materials as any
         const materialId = task.review_material_id
-
-        // SM-2 計算
         const currentState = {
             interval: rm?.sm2_interval ?? 0,
             easeFactor: rm?.sm2_ease_factor ?? 2.5,
             repetitions: rm?.sm2_repetitions ?? 0,
         }
-        const result = calculateSM2(rating, currentState)
+        const result = calculateSM2(worstRating, currentState)
         const nextDueDate = getNextDueDate(result.nextDueDays)
 
-        // ① 現在のタスクをすぐに completed にする（再ログイン後に再表示されないようにするための核心）
         await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', taskId)
-
-        // ② review_materials の SM-2 状態を更新
         if (materialId) {
             await supabase.from('review_materials').update({
                 sm2_interval: result.interval,
                 sm2_ease_factor: result.easeFactor,
                 sm2_repetitions: result.repetitions,
             }).eq('id', materialId)
-
-            // ③ 未来の pending タスクだけ削除（旧固定スケジュールの重複クリーンアップ）
             await supabase.from('review_tasks')
                 .delete()
                 .eq('review_material_id', materialId)
                 .eq('status', 'pending')
                 .gt('due_at', new Date().toISOString())
-
-            // ④ 次の復習タスクを1つ作成
             await supabase.from('review_tasks').insert({
                 user_id: userId,
                 review_material_id: materialId,
@@ -404,7 +511,12 @@ export function ReviewScreen() {
             })
         }
 
-        // ⑤ UIからこのタスクを除去（1件だけ）
+        setCompletedThemesInTask((prev) => { const next = { ...prev }; delete next[taskId]; return next })
+        setThemeRatingsInTask((prev) => {
+            const next = { ...prev }
+            themes.forEach((t) => delete next[getThemeKey(taskId, t)])
+            return next
+        })
         setReviewTasks((prev) => prev.filter((t) => t.id !== taskId))
     }
 
@@ -551,7 +663,8 @@ export function ReviewScreen() {
         const question = themeQuiz.questions[qIndex]
         if (!question) return
 
-        const isCorrect = choiceIndex === question.correct_index
+        // choiceIndex === -1 は「わからない」ボタン → 必ず不正解扱い
+        const isCorrect = choiceIndex !== -1 && choiceIndex === question.correct_index
         await supabase.from('quiz_attempts').insert({
             user_id: userId,
             review_task_id: taskId,
@@ -589,6 +702,75 @@ export function ReviewScreen() {
         })
         const nextRemaining = remaining.filter((t) => t !== theme)
         if (nextRemaining.length === 0) handleSkipTask(taskId)
+    }
+
+    const handleEditTheme = async (task: ReviewTask, oldTheme: string, newTheme: string) => {
+        const trimmed = newTheme.trim()
+        if (!trimmed) return
+        setEditingThemeKey(null)
+        setEditingThemeText('')
+
+        const materialId = task.review_material_id
+        if (materialId) {
+            // 現在のcontentの中で该当テーマ行を新テーマに置き換える
+            const currentContent = task.review_materials?.content || task.study_logs?.note || ''
+            const lines = currentContent.split('\n').map((line: string) => {
+                const cleaned = line.trim().replace(/^[-*•・]\s*/, '').trim()
+                if (cleaned === oldTheme.trim()) {
+                    // 元の行頭文字を保持しながら置き換える
+                    const prefix = line.match(/^(\s*[-*•・]\s*)/)?.[1] || '・'
+                    return `${prefix}${trimmed}`
+                }
+                return line
+            })
+            const newContent = lines.join('\n')
+
+            const { error } = await supabase
+                .from('review_materials')
+                .update({ content: newContent })
+                .eq('id', materialId)
+            if (error) {
+                Alert.alert('保存エラー', error.message)
+                return
+            }
+            // ローカルのreviewTasksも更新する
+            setReviewTasks((prev) =>
+                prev.map((t) => {
+                    if (t.id !== task.id) return t
+                    return {
+                        ...t,
+                        study_logs: { ...t.study_logs, note: newContent } as ReviewTask['study_logs'],
+                        review_materials: t.review_materials ? { ...t.review_materials, content: newContent } : t.review_materials,
+                    }
+                }) as ReviewTask[]
+            )
+        }
+
+        // 旧テーマのクイズステートを削除して再生成
+        const fakeTask = {
+            ...task,
+            study_logs: task.study_logs ? { ...task.study_logs, note: task.review_materials?.content || task.study_logs?.note || '' } : task.study_logs,
+            review_materials: task.review_materials ? {
+                ...task.review_materials, content: (task.review_materials?.content || '').split('\n').map((line: string) => {
+                    const cleaned = line.trim().replace(/^[-*•・]\s*/, '').trim()
+                    if (cleaned === oldTheme.trim()) {
+                        const prefix = line.match(/^(\s*[-*•・]\s*)/)?.[1] || '・'
+                        return `${prefix}${trimmed}`
+                    }
+                    return line
+                }).join('\n')
+            } : task.review_materials,
+        }
+
+        setQuizByTask((prev) => {
+            const current = prev[task.id]
+            if (!current) return prev
+            const nextThemes = { ...current.themes }
+            delete nextThemes[oldTheme]
+            return { ...prev, [task.id]: { themes: nextThemes } }
+        })
+
+        await handleGenerateQuiz(fakeTask, trimmed)
     }
 
     const handleCreate = async () => {
@@ -645,12 +827,12 @@ export function ReviewScreen() {
         }
 
         if (data?.id) {
-            // SM-2: 最初の復習は1日後のタスクを1つだけ作成
-            const dueDate = getNextDueDate(1)
+            // 選択した学習日の「翌日」を初回復習日にする（昨日で登録→今日から解ける）
+            const firstDueDate = new Date(studyDayDate.getTime() + 24 * 60 * 60 * 1000)
             const { error: taskError } = await supabase.from('review_tasks').insert({
                 user_id: userId,
                 review_material_id: data.id,
-                due_at: dueDate.toISOString(),
+                due_at: firstDueDate.toISOString(),
                 status: 'pending',
             })
             if (taskError) {
@@ -737,7 +919,7 @@ export function ReviewScreen() {
                 themes = ['全体復習']
             }
             // Exclude already skipped themes
-            const visibleThemes = themes.filter((theme) => !(skippedThemes[task.id] || []).includes(theme))
+            const visibleThemes = themes.filter((theme) => !(skippedThemes[task.id] || []).includes(theme) && !(completedThemesInTask[task.id] || []).includes(theme))
             groups[key].themeCount += visibleThemes.length
         })
 
@@ -746,7 +928,7 @@ export function ReviewScreen() {
             // if (b.tasks.length !== a.tasks.length) return b.tasks.length - a.tasks.length
             return a.title.localeCompare(b.title)
         })
-    }, [reviewTasks, referenceBooks, skippedThemes])
+    }, [reviewTasks, referenceBooks, skippedThemes, completedThemesInTask])
 
     // DEBUG: Log groups
     useEffect(() => {
@@ -851,7 +1033,7 @@ export function ReviewScreen() {
                                     if (themes.length === 0) {
                                         themes = ['全体復習']
                                     }
-                                    const visibleThemes = themes.filter((theme) => !(skippedThemes[task.id] || []).includes(theme))
+                                    const visibleThemes = themes.filter((theme) => !(skippedThemes[task.id] || []).includes(theme) && !(completedThemesInTask[task.id] || []).includes(theme))
 
                                     if (visibleThemes.length === 0) return null
 
@@ -896,9 +1078,7 @@ export function ReviewScreen() {
                                                                 </Pressable>
                                                             ))}
                                                         </View>
-                                                        <Pressable style={styles.outlineButton} onPress={() => handleSkipTheme(task.id, theme, visibleThemes)}>
-                                                            <Text style={styles.outlineButtonText}>このテーマを消す</Text>
-                                                        </Pressable>
+
                                                         {!themeQuiz && !flashcardMode[themeKey] && (() => {
                                                             const flashcard = parseFlashcard(theme)
                                                             // フラッシュカードモード（答えあり）: フラッシュカードボタンのみ
@@ -976,6 +1156,50 @@ export function ReviewScreen() {
                                                                                     </Pressable>
                                                                                 )
                                                                             })}
+                                                                            {!answered && (
+                                                                                <>
+                                                                                    <Pressable
+                                                                                        style={[styles.outlineButton, styles.dontKnowButton]}
+                                                                                        onPress={() => handleAnswer(task.id, theme, qIndex, -1)}
+                                                                                    >
+                                                                                        <Text style={[styles.outlineButtonText, styles.dontKnowButtonText]}>わからない 🤷</Text>
+                                                                                    </Pressable>
+                                                                                    {editingThemeKey === themeKey ? (
+                                                                                        <View style={styles.editThemeContainer}>
+                                                                                            <TextInput
+                                                                                                style={styles.editThemeInput}
+                                                                                                value={editingThemeText}
+                                                                                                onChangeText={setEditingThemeText}
+                                                                                                multiline
+                                                                                                autoFocus
+                                                                                                placeholder="テーマを編集してください"
+                                                                                            />
+                                                                                            <View style={styles.editThemeActions}>
+                                                                                                <Pressable
+                                                                                                    style={[styles.outlineButton, styles.editThemeCancelButton]}
+                                                                                                    onPress={() => { setEditingThemeKey(null); setEditingThemeText('') }}
+                                                                                                >
+                                                                                                    <Text style={styles.outlineButtonText}>キャンセル</Text>
+                                                                                                </Pressable>
+                                                                                                <Pressable
+                                                                                                    style={[styles.outlineButton, styles.editThemeSubmitButton]}
+                                                                                                    onPress={() => handleEditTheme(task, theme, editingThemeText)}
+                                                                                                >
+                                                                                                    <Text style={[styles.outlineButtonText, styles.editThemeSubmitText]}>これで作り直す ✨</Text>
+                                                                                                </Pressable>
+                                                                                            </View>
+                                                                                        </View>
+                                                                                    ) : (
+                                                                                        <Pressable
+                                                                                            style={[styles.outlineButton, styles.editThemeButton]}
+                                                                                            onPress={() => { setEditingThemeKey(themeKey); setEditingThemeText(theme) }}
+                                                                                        >
+                                                                                            <Text style={[styles.outlineButtonText, styles.editThemeButtonText]}>✏️ テーマを編集して作り直す</Text>
+                                                                                        </Pressable>
+                                                                                    )}
+                                                                                </>
+                                                                            )}
+
                                                                             {answered && (
                                                                                 <View style={{ marginTop: 8 }}>
                                                                                     <Text style={styles.mutedText}>
@@ -1039,7 +1263,7 @@ export function ReviewScreen() {
                                 {currentTasks.every(t => {
                                     const themes = splitThemes(t.study_logs?.note || '')
                                     // Check if all themes for this task are skipped/hidden
-                                    const visible = themes.filter((theme) => !(skippedThemes[t.id] || []).includes(theme))
+                                    const visible = themes.filter((theme) => !(skippedThemes[t.id] || []).includes(theme) && !(completedThemesInTask[t.id] || []).includes(theme))
                                     return visible.length === 0
                                 }) && (
                                         <View style={[styles.emptyState, { marginTop: 40, backgroundColor: 'transparent' }]}>
@@ -1215,6 +1439,27 @@ export function ReviewScreen() {
                             )}
                         </View>
 
+                        <Pressable
+                            style={[styles.outlineButton, styles.photoThemeButton]}
+                            onPress={() => {
+                                Alert.alert(
+                                    '写真からテーマを抽出',
+                                    'カメラで撮影するか、ライブラリから選んでください。',
+                                    [
+                                        { text: 'キャンセル', style: 'cancel' },
+                                        { text: 'カメラ', onPress: () => handlePhotoToThemes(true) },
+                                        { text: 'ライブラリ', onPress: () => handlePhotoToThemes(false) },
+                                    ]
+                                )
+                            }}
+                            disabled={photoThemeLoading}
+                        >
+                            <Ionicons name="camera" size={18} color="#2563eb" />
+                            <Text style={styles.photoThemeButtonText}>
+                                {photoThemeLoading ? '抽出中...' : '写真からテーマを抽出（最大5件）'}
+                            </Text>
+                        </Pressable>
+
                         <View style={styles.modeToggle}>
                             <Pressable
                                 style={[styles.modeButton, createMode === 'ai' && styles.modeButtonActive]}
@@ -1376,6 +1621,18 @@ const styles = StyleSheet.create({
         fontSize: 12,
     },
 
+    photoThemeButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        marginBottom: 4,
+    },
+    photoThemeButtonText: {
+        color: '#2563eb',
+        fontWeight: '600',
+        fontSize: 14,
+    },
     taskCard: {
         marginTop: 12,
         gap: 12,
@@ -2012,6 +2269,61 @@ const styles = StyleSheet.create({
     },
     hardButtonText: {
         color: '#b91c1c',
+        fontWeight: '700',
+    },
+    dontKnowButton: {
+        backgroundColor: '#f1f5f9',
+        borderColor: '#94a3b8',
+        marginTop: 4,
+    },
+    dontKnowButtonText: {
+        color: '#475569',
+        fontWeight: '700',
+    },
+    editThemeButton: {
+        backgroundColor: '#fefce8',
+        borderColor: '#fbbf24',
+        marginTop: 4,
+    },
+    editThemeButtonText: {
+        color: '#92400e',
+        fontWeight: '700',
+    },
+    editThemeContainer: {
+        marginTop: 8,
+        gap: 8,
+        backgroundColor: '#fefce8',
+        borderWidth: 1,
+        borderColor: '#fbbf24',
+        borderRadius: 10,
+        padding: 10,
+    },
+    editThemeInput: {
+        borderWidth: 1,
+        borderColor: '#fbbf24',
+        borderRadius: 8,
+        padding: 10,
+        fontSize: 13,
+        backgroundColor: '#ffffff',
+        minHeight: 60,
+        textAlignVertical: 'top',
+    },
+    editThemeActions: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    editThemeCancelButton: {
+        flex: 1,
+        backgroundColor: '#f1f5f9',
+        borderColor: '#94a3b8',
+    },
+    editThemeSubmitButton: {
+        flex: 2,
+        backgroundColor: '#fef9c3',
+        borderColor: '#eab308',
+    },
+    editThemeSubmitText: {
+        color: '#713f12',
         fontWeight: '700',
     },
 })
