@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
     Alert,
     Pressable,
@@ -8,10 +8,11 @@ import {
     TextInput,
     View,
     Modal,
-    KeyboardAvoidingView,
     Platform,
     ActivityIndicator,
+    KeyboardAvoidingView,
 } from 'react-native'
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'
 import { supabase } from '../lib/supabase'
 import { useProfile } from '../contexts/ProfileContext'
 import type { ReviewMaterial, ReferenceBook } from '../types'
@@ -35,6 +36,15 @@ export function FlashcardScreen() {
 
     // Book picker
     const [showBookPicker, setShowBookPicker] = useState(false)
+    const keyboardRef = useRef<any>(null)
+
+    const retryKeyboardAwareUpdate = () => {
+        ;[0, 120, 280, 520].forEach((delay) => {
+            setTimeout(() => {
+                keyboardRef.current?.update?.()
+            }, delay)
+        })
+    }
 
     useEffect(() => {
         loadData()
@@ -128,6 +138,10 @@ export function FlashcardScreen() {
                     reference_book_id: selectedBookId || null,
                     subject: finalSubject,
                     content: contentInput.trim(),
+                    // 初回復習(+1日)タスクを別途作成するため、SM-2状態は1回目済みで初期化
+                    sm2_interval: 1,
+                    sm2_ease_factor: 2.5,
+                    sm2_repetitions: 1,
                 })
                 .select()
                 .single()
@@ -228,15 +242,32 @@ export function FlashcardScreen() {
 
             {/* CREATE/EDIT MODAL */}
             <Modal visible={showCreateModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowCreateModal(false)}>
-                <KeyboardAvoidingView style={styles.modalContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                    <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>{editingCardId ? '単語カードを編集' : '単語カードを作成'}</Text>
-                        <Pressable onPress={() => setShowCreateModal(false)}>
-                            <Text style={styles.cancelText}>キャンセル</Text>
-                        </Pressable>
-                    </View>
+                <KeyboardAvoidingView
+                    style={{ flex: 1 }}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+                >
+                <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitle}>{editingCardId ? '単語カードを編集' : '単語カードを作成'}</Text>
+                    <Pressable onPress={() => setShowCreateModal(false)}>
+                        <Text style={styles.cancelText}>キャンセル</Text>
+                    </Pressable>
+                </View>
 
-                    <ScrollView style={styles.modalBody}>
+                <KeyboardAwareScrollView
+                    style={{ flex: 1 }}
+                    contentContainerStyle={styles.modalBody}
+                    keyboardShouldPersistTaps="handled"
+                    innerRef={(ref) => { keyboardRef.current = ref }}
+                    onKeyboardWillShow={retryKeyboardAwareUpdate}
+                    onKeyboardDidShow={retryKeyboardAwareUpdate}
+                    enableOnAndroid
+                    extraScrollHeight={100}
+                    extraHeight={80}
+                    viewIsInsideTabBar
+                    keyboardOpeningTime={500}
+                    enableResetScrollToCoords={false}
+                >
                         <Text style={styles.label}>教材・科目</Text>
                         <View style={styles.bookPickerContainer}>
                             <Pressable style={styles.bookPickerButton} onPress={() => setShowBookPicker(!showBookPicker)}>
@@ -283,6 +314,7 @@ export function FlashcardScreen() {
                                 placeholder="例: 英語、数学"
                                 value={subjectInput}
                                 onChangeText={setSubjectInput}
+                                onFocus={retryKeyboardAwareUpdate}
                             />
                         )}
 
@@ -292,6 +324,7 @@ export function FlashcardScreen() {
                             placeholder="例: apple : りんご"
                             value={contentInput}
                             onChangeText={setContentInput}
+                            onFocus={retryKeyboardAwareUpdate}
                             multiline
                             textAlignVertical="top"
                         />
@@ -299,7 +332,7 @@ export function FlashcardScreen() {
                         <Pressable style={styles.primaryButton} onPress={saveCard} disabled={loading}>
                             <Text style={styles.primaryButtonText}>{loading ? '保存中...' : '保存'}</Text>
                         </Pressable>
-                    </ScrollView>
+                </KeyboardAwareScrollView>
                 </KeyboardAvoidingView>
             </Modal>
         </View>

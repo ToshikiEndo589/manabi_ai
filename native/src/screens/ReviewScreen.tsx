@@ -8,10 +8,12 @@ import {
     TextInput,
     View,
     Modal,
-    KeyboardAvoidingView,
     Platform,
     PanResponder,
+    KeyboardAvoidingView,
+    ActivityIndicator,
 } from 'react-native'
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'
 import { supabase } from '../lib/supabase'
 import { useProfile } from '../contexts/ProfileContext'
 import type { ReviewTask } from '../types'
@@ -51,6 +53,7 @@ type ThemeQuizState = {
     loading: boolean
     questions: QuizQuestion[]
     answers: Record<number, number>
+    attemptIds?: Record<number, string>
 }
 
 type QuizState = {
@@ -89,11 +92,51 @@ export function ReviewScreen() {
 
     // Creation modal states
     const [showCreateModal, setShowCreateModal] = useState(false)
+    /** 教材選択後に「追加」から開いた場合、その教材IDで固定（変更不可） */
+    const [createModalBookLockedId, setCreateModalBookLockedId] = useState<string | null>(null)
     type CreateMode = 'ai' | 'flashcard'
     const [createMode, setCreateMode] = useState<CreateMode>('ai')
     const [selectedDate, setSelectedDate] = useState(new Date())
     const [showDatePicker, setShowDatePicker] = useState(false)
     const [selectedSubjectKey, setSelectedSubjectKey] = useState<string | null>(null)
+
+    // 履歴モーダル
+    const [showHistoryModal, setShowHistoryModal] = useState(false)
+    const [historyLoading, setHistoryLoading] = useState(false)
+    const [historyTab, setHistoryTab] = useState<'ai' | 'flashcard'>('ai')
+    const [historyErrorMessage, setHistoryErrorMessage] = useState<string | null>(null)
+    const [expandedHistoryGroups, setExpandedHistoryGroups] = useState<Record<string, boolean>>({})
+    type QuizHistoryItem = {
+        id: string
+        created_at: string
+        theme: string
+        question: string
+        choices: string[]
+        correct_index: number
+        selected_index: number
+        is_correct: boolean
+        subject: string
+        reference_book_id: string | null
+        explanation?: string | null
+        rating?: 'perfect' | 'good' | 'hard' | null
+        sm2_interval?: number | null
+        sm2_ease_factor?: number | null
+        sm2_repetitions?: number | null
+    }
+    type FlashcardHistoryItem = {
+        id: string
+        created_at: string
+        subject: string
+        content: string
+        rating: 'perfect' | 'good' | 'hard'
+        reference_book_id: string | null
+        review_material_id: string | null
+        sm2_interval?: number | null
+        sm2_ease_factor?: number | null
+        sm2_repetitions?: number | null
+    }
+    const [quizHistory, setQuizHistory] = useState<QuizHistoryItem[]>([])
+    const [flashcardHistory, setFlashcardHistory] = useState<FlashcardHistoryItem[]>([])
 
     // Book selection states
     const [referenceBooks, setReferenceBooks] = useState<ReferenceBook[]>([])
@@ -168,9 +211,19 @@ export function ReviewScreen() {
     const cropRectRef = useRef<CropRect>(cropRect)
     const cropLayoutRef = useRef(cropContainerLayout)
     const cropImgSizeRef = useRef({ w: cropImageWidth, h: cropImageHeight })
+    const contentModalKeyboardRef = useRef<any>(null)
+    const createModalKeyboardRef = useRef<any>(null)
     cropRectRef.current = cropRect
     cropLayoutRef.current = cropContainerLayout
     cropImgSizeRef.current = { w: cropImageWidth, h: cropImageHeight }
+
+    const retryKeyboardAwareUpdate = (ref: React.MutableRefObject<any>) => {
+        ;[0, 120, 280, 520].forEach((delay) => {
+            setTimeout(() => {
+                ref.current?.update?.()
+            }, delay)
+        })
+    }
 
     const getCropDisplayRect = (): { offsetX: number; offsetY: number; displayW: number; displayH: number } => {
         const { width: cw, height: ch } = cropLayoutRef.current
@@ -428,9 +481,9 @@ export function ReviewScreen() {
                 .from('study_logs')
                 .select('id, note, subject, started_at, reference_book_id')
                 .in('id', studyLogIds as string[])
-            ; (logsData || []).forEach((log: any) => {
-                studyLogMap.set(log.id, log)
-            })
+                ; (logsData || []).forEach((log: any) => {
+                    studyLogMap.set(log.id, log)
+                })
         }
 
         const materialMap = new Map<string, any>()
@@ -439,9 +492,9 @@ export function ReviewScreen() {
                 .from('review_materials')
                 .select('id, content, subject, reference_book_id, created_at, study_date')
                 .in('id', materialIds as string[])
-            ; (materialsData || []).forEach((m: any) => {
-                materialMap.set(m.id, m)
-            })
+                ; (materialsData || []).forEach((m: any) => {
+                    materialMap.set(m.id, m)
+                })
         }
 
         const normalized = tasks.map((task) => {
@@ -459,10 +512,161 @@ export function ReviewScreen() {
         setFutureTasks(normalized)
     }
 
+    const pickFirstRelation = <T,>(value: T | T[] | null | undefined): T | null => {
+        if (Array.isArray(value)) return value[0] ?? null
+        return value ?? null
+    }
+
+    const formatHistoryDate = (dateString?: string | null) => {
+        if (!dateString) return '—'
+        const date = new Date(dateString)
+        if (Number.isNaN(date.getTime())) return '—'
+        return formatDateLabel(date)
+    }
+
+    const loadHistory = async () => {
+        if (!userId) return
+        setHistoryLoading(true)
+        setHistoryErrorMessage(null)
+        try {
+            const quizList: QuizHistoryItem[] = []
+            const flashList: FlashcardHistoryItem[] = []
+            const errors: string[] = []
+
+            try {
+                const { data: qaData, error: qaError } = await supabase
+                    .from('quiz_attempts')
+                    .select(`
+                        id, question, choices, correct_index, selected_index, is_correct, created_at, explanation, rating, theme,
+                        review_tasks ( review_material_id, study_log_id, review_materials ( subject, reference_book_id, content, sm2_interval, sm2_ease_factor, sm2_repetitions ), study_logs ( subject, reference_book_id, note ) )
+                    `)
+                    .eq('user_id', userId)
+                    .order('created_at', { ascending: false })
+
+                if (qaError) {
+                    errors.push('AIモード履歴の取得に失敗しました。')
+                } else if (qaData) {
+                    const rt = (qaData as any[]).map((row: any) => {
+                        const t = pickFirstRelation(row.review_tasks)
+                        const rm = pickFirstRelation(t?.review_materials)
+                        const sl = pickFirstRelation(t?.study_logs)
+                        const normalizedChoices = Array.isArray(row.choices)
+                            ? row.choices.filter((choice: unknown) => typeof choice === 'string') as string[]
+                            : []
+                        const correct_index = Number.isInteger(row.correct_index) ? row.correct_index : -1
+                        const selected_index = Number.isInteger(row.selected_index) ? row.selected_index : -1
+                        const is_correct = !!row.is_correct
+                        const explanation = typeof row.explanation === 'string' ? row.explanation : null
+                        const rating = row.rating === 'perfect' || row.rating === 'good' || row.rating === 'hard' ? row.rating : null
+                        const question = typeof row.question === 'string' ? row.question : '—'
+                        const created_at = typeof row.created_at === 'string' ? row.created_at : ''
+
+                        let theme = ''
+                        if (typeof row.theme === 'string' && row.theme.trim() !== '') {
+                            theme = row.theme
+                        } else {
+                            const themeRaw = (rm?.content ?? sl?.note ?? '')
+                            theme = typeof themeRaw === 'string'
+                                ? (themeRaw.trim().split('\n')[0] || '—')
+                                : '—'
+                        }
+
+                        const subject = rm?.subject ?? sl?.subject ?? '—'
+                        const reference_book_id = rm?.reference_book_id ?? sl?.reference_book_id ?? null
+                        const sm2_interval = typeof rm?.sm2_interval === 'number' ? rm.sm2_interval : null
+                        const sm2_ease_factor = typeof rm?.sm2_ease_factor === 'number' ? rm.sm2_ease_factor : null
+                        const sm2_repetitions = typeof rm?.sm2_repetitions === 'number' ? rm.sm2_repetitions : null
+                        return {
+                            id: row.id,
+                            created_at,
+                            theme,
+                            question,
+                            choices: normalizedChoices,
+                            correct_index,
+                            selected_index,
+                            is_correct,
+                            subject,
+                            reference_book_id,
+                            explanation,
+                            rating,
+                            sm2_interval,
+                            sm2_ease_factor,
+                            sm2_repetitions,
+                        }
+                    })
+                    quizList.push(...rt)
+                }
+            } catch {
+                errors.push('AIモード履歴の取得に失敗しました。')
+            }
+
+            try {
+                const { data: faData, error: faError } = await supabase
+                    .from('flashcard_attempts')
+                    .select('id, subject, content, rating, created_at, review_material_id, review_materials ( reference_book_id, sm2_interval, sm2_ease_factor, sm2_repetitions )')
+                    .eq('user_id', userId)
+                    .order('created_at', { ascending: false })
+                    .limit(200)
+
+                if (faError) {
+                    errors.push('単語帳履歴の取得に失敗しました。')
+                } else if (faData) {
+                    flashList.push(...(faData as any[]).map((row: any) => {
+                        const rm = pickFirstRelation(row.review_materials)
+                        const rating = row.rating === 'perfect' || row.rating === 'good' || row.rating === 'hard'
+                            ? row.rating
+                            : 'good'
+                        return {
+                            id: row.id,
+                            created_at: typeof row.created_at === 'string' ? row.created_at : '',
+                            subject: typeof row.subject === 'string' ? row.subject : '—',
+                            content: typeof row.content === 'string' ? row.content : '—',
+                            rating,
+                            reference_book_id: rm?.reference_book_id ?? null,
+                            review_material_id: row.review_material_id || null,
+                            sm2_interval: typeof rm?.sm2_interval === 'number' ? rm.sm2_interval : null,
+                            sm2_ease_factor: typeof rm?.sm2_ease_factor === 'number' ? rm.sm2_ease_factor : null,
+                            sm2_repetitions: typeof rm?.sm2_repetitions === 'number' ? rm.sm2_repetitions : null,
+                        }
+                    }))
+                }
+            } catch {
+                errors.push('単語帳履歴の取得に失敗しました。')
+            }
+
+            const bookFilter = selectedSubjectKey?.startsWith('book:') ? selectedSubjectKey.slice(5) : null
+            const subjectFilter = selectedSubjectKey?.startsWith('subject:')
+                ? selectedSubjectKey.replace(/^subject:/, '')
+                : null
+
+            const filterQuiz = (item: QuizHistoryItem) => {
+                if (bookFilter) return item.reference_book_id === bookFilter
+                if (subjectFilter) return item.subject === subjectFilter
+                return true
+            }
+            const filterFlash = (item: FlashcardHistoryItem) => {
+                if (bookFilter) return item.reference_book_id === bookFilter
+                if (subjectFilter) return item.subject === subjectFilter
+                return true
+            }
+
+            setQuizHistory(quizList.filter(filterQuiz))
+            setFlashcardHistory(flashList.filter(filterFlash))
+            setHistoryErrorMessage(errors.length > 0 ? errors.join('\n') : null)
+        } finally {
+            setHistoryLoading(false)
+        }
+    }
+
     useEffect(() => {
         loadTasks()
         loadFutureTasks()
     }, [userId])
+
+    useEffect(() => {
+        if (!showHistoryModal) return
+        loadHistory()
+    }, [showHistoryModal, selectedSubjectKey, userId])
 
     // テーマの進捗（スキップ/完了）を端末に保存して、再ログイン後も維持する
     useEffect(() => {
@@ -470,21 +674,21 @@ export function ReviewScreen() {
         setCompletedThemesInTask({})
         if (!userId) return
         let active = true
-        ; (async () => {
-            try {
-                const raw = await AsyncStorage.getItem(getReviewProgressStorageKey(userId))
-                if (!active || !raw) return
-                const parsed = JSON.parse(raw) as Partial<PersistedReviewProgress>
-                if (parsed.skippedThemes && typeof parsed.skippedThemes === 'object') {
-                    setSkippedThemes(parsed.skippedThemes)
+            ; (async () => {
+                try {
+                    const raw = await AsyncStorage.getItem(getReviewProgressStorageKey(userId))
+                    if (!active || !raw) return
+                    const parsed = JSON.parse(raw) as Partial<PersistedReviewProgress>
+                    if (parsed.skippedThemes && typeof parsed.skippedThemes === 'object') {
+                        setSkippedThemes(parsed.skippedThemes)
+                    }
+                    if (parsed.completedThemesInTask && typeof parsed.completedThemesInTask === 'object') {
+                        setCompletedThemesInTask(parsed.completedThemesInTask)
+                    }
+                } catch {
+                    // ignore storage parse/read errors
                 }
-                if (parsed.completedThemesInTask && typeof parsed.completedThemesInTask === 'object') {
-                    setCompletedThemesInTask(parsed.completedThemesInTask)
-                }
-            } catch {
-                // ignore storage parse/read errors
-            }
-        })()
+            })()
         return () => { active = false }
     }, [userId])
 
@@ -538,6 +742,7 @@ export function ReviewScreen() {
             .select('*')
             .eq('user_id', userId)
             .order('study_date', { ascending: false })
+            .order('created_at', { ascending: false })
         if (!error) {
             let list = (data || []) as (ReviewMaterial & { study_date?: string | null })[]
             if (selectedSubjectKey) {
@@ -607,28 +812,41 @@ export function ReviewScreen() {
     }
 
     const deleteContentTheme = (material: ReviewMaterial & { study_date?: string | null }, lineIndex: number) => {
-        let lines = (material.content || '').split('\n')
-        if (lines.length === 0) lines = ['']
-        if (lineIndex < 0 || lineIndex >= lines.length) return
-        lines.splice(lineIndex, 1)
-        const newContent = lines.filter((l) => l.trim()).join('\n')
-        if (!newContent.trim()) {
-            supabase.from('review_materials').delete().eq('id', material.id).then(({ error }) => {
-                if (!error) {
-                    setContentMaterials((prev) => prev.filter((m) => m.id !== material.id))
-                    loadTasks()
-                    loadFutureTasks()
-                } else Alert.alert('エラー', '削除に失敗しました')
-            })
-            return
-        }
-        supabase.from('review_materials').update({ content: newContent }).eq('id', material.id).then(({ error }) => {
-            if (!error) {
-                setContentMaterials((prev) => prev.map((m) => (m.id === material.id ? { ...m, content: newContent } : m)))
-                loadTasks()
-                loadFutureTasks()
-            } else Alert.alert('エラー', '更新に失敗しました')
-        })
+        Alert.alert(
+            'テーマを削除',
+            'この問題（テーマ）を削除しますか？明日以降の復習予定からも消えます。',
+            [
+                { text: 'キャンセル', style: 'cancel' },
+                {
+                    text: '削除',
+                    style: 'destructive',
+                    onPress: () => {
+                        let lines = (material.content || '').split('\n')
+                        if (lines.length === 0) lines = ['']
+                        if (lineIndex < 0 || lineIndex >= lines.length) return
+                        lines.splice(lineIndex, 1)
+                        const newContent = lines.filter((l) => l.trim()).join('\n')
+                        if (!newContent.trim()) {
+                            supabase.from('review_materials').delete().eq('id', material.id).then(({ error }) => {
+                                if (!error) {
+                                    setContentMaterials((prev) => prev.filter((m) => m.id !== material.id))
+                                    loadTasks()
+                                    loadFutureTasks()
+                                } else Alert.alert('エラー', '削除に失敗しました')
+                            })
+                            return
+                        }
+                        supabase.from('review_materials').update({ content: newContent }).eq('id', material.id).then(({ error }) => {
+                            if (!error) {
+                                setContentMaterials((prev) => prev.map((m) => (m.id === material.id ? { ...m, content: newContent } : m)))
+                                loadTasks()
+                                loadFutureTasks()
+                            } else Alert.alert('エラー', '更新に失敗しました')
+                        })
+                    }
+                }
+            ]
+        )
     }
 
     // Extracted loadBooks function for reusability
@@ -770,7 +988,11 @@ export function ReviewScreen() {
             }
             const themes: string[] = Array.isArray(data.themes) ? data.themes : []
             const slots = themes.slice(0, MAX_THEME_FROM_IMAGE).map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
-            while (slots.length < MAX_THEME_FROM_IMAGE) slots.push('')
+            // 抽出されたテーマがない場合は空の枠を1つだけ用意する
+            if (slots.length === 0) {
+                slots.push('')
+            }
+            // 空の要素でMAXまで埋める処理は削除（必要な分だけ表示する）
             setAiNotes(slots)
             setCreateMode('ai')
         } catch (e) {
@@ -992,15 +1214,21 @@ export function ReviewScreen() {
     }
 
     /**
-     * SM-2: 1テーマずつ評価を記録。そのタスクの全テーマが終わったときだけDB更新・タスク削除する。
+     * SM-2: 1テーマずつ評価を記録。
+     * 1テーマ1件のタスク（新仕様）の場合はその場で即スケジュール更新。
+     * 複数テーマが1件に含まれる旧データの場合は、全テーマ完了時に一番厳しい評価で1回だけ更新（互換）。
+     * @param source 'flashcard' = 単語帳で答えた → flashcard_attempts に記録する / 'quiz' = AIクイズで答えた → 記録しない
      */
-    const handleSM2Rating = async (taskId: string, theme: string, rating: SM2Rating) => {
+    const handleSM2Rating = async (taskId: string, theme: string, rating: SM2Rating, source: 'flashcard' | 'quiz') => {
         const task = reviewTasks.find((t) => t.id === taskId)
         if (!task) return
 
         const noteContent = task.review_materials?.content || task.study_logs?.note || ''
         const allThemes = splitThemes(noteContent)
         const themes = allThemes.length > 0 ? allThemes : ['全体復習']
+
+        // 1テーマ1件のタスクか（新仕様なら即時更新する）
+        const isSingleTheme = themes.length <= 1
 
         // このテーマの評価を記録し、このテーマを「このタスク内で完了」に追加
         setThemeRatingsInTask((prev) => ({ ...prev, [getThemeKey(taskId, theme)]: rating }))
@@ -1009,28 +1237,34 @@ export function ReviewScreen() {
             [taskId]: [...(prev[taskId] || []).filter((t) => t !== theme), theme],
         }))
 
-        // 表示上はすぐ非表示にするため、completedThemesInTask でフィルタしているのでここで return すると
-        // まだ他テーマが残っているかどうかは state 更新後なので判定できない。次のレンダーで判定される。
-        // 全テーマ完了時だけ DB 更新したいので、同期的に「今の completed にこの theme を足した集合」で判定する。
         const completedNow = [...(completedThemesInTask[taskId] || []).filter((t) => t !== theme), theme]
         const allCompleted = themes.every((t) => completedNow.includes(t))
 
-        if (!allCompleted) {
+        // 単一テーマなら即時更新、複数テーマ（旧データ）なら全完了時のみ更新
+        if (!isSingleTheme && !allCompleted) {
             return
         }
 
-        // 全テーマ完了: 一番厳しい評価で SM-2 を更新（苦手 > うろ覚え > 完璧）
-        const ratings = themes.map((t) => (t === theme ? rating : themeRatingsInTask[getThemeKey(taskId, t)] ?? 'perfect'))
-        const worstRating: SM2Rating = ratings.some((r) => r === 'hard') ? 'hard' : ratings.some((r) => r === 'good') ? 'good' : 'perfect'
-
         const rm = task.review_materials as any
         const materialId = task.review_material_id
+        const rawInterval = rm?.sm2_interval ?? 0
+        const rawRepetitions = rm?.sm2_repetitions ?? 0
+        const normalizedInterval = rawInterval === 0 && rawRepetitions === 0 ? 1 : rawInterval
+        const normalizedRepetitions = rawInterval === 0 && rawRepetitions === 0 ? 1 : rawRepetitions
         const currentState = {
-            interval: rm?.sm2_interval ?? 0,
+            interval: normalizedInterval,
             easeFactor: rm?.sm2_ease_factor ?? 2.5,
-            repetitions: rm?.sm2_repetitions ?? 0,
+            repetitions: normalizedRepetitions,
         }
-        const result = calculateSM2(worstRating, currentState)
+
+        const effectiveRating: SM2Rating = isSingleTheme
+            ? rating
+            : (() => {
+                const ratings = themes.map((t) => (t === theme ? rating : themeRatingsInTask[getThemeKey(taskId, t)] ?? 'perfect'))
+                return ratings.some((r) => r === 'hard') ? 'hard' : ratings.some((r) => r === 'good') ? 'good' : 'perfect'
+            })()
+
+        const result = calculateSM2(effectiveRating, currentState)
         const nextDueDate = getNextDueDate(result.nextDueDays)
 
         const { error: updateError } = await supabase.from('review_tasks').update({ status: 'completed' }).eq('id', taskId)
@@ -1054,8 +1288,8 @@ export function ReviewScreen() {
                 sm2_repetitions: result.repetitions,
             }).eq('id', materialId)
             if (matError) {
-                Alert.alert('エラー', '復習記録の更新に失敗しました。')
-                return
+                // Log a warning but do NOT return — still proceed to schedule the next review task
+                console.warn('[SM2] review_materials update failed:', matError.message)
             }
             await supabase.from('review_tasks')
                 .delete()
@@ -1070,6 +1304,34 @@ export function ReviewScreen() {
             })
             if (insertError) {
                 Alert.alert('エラー', '次回復習予定の登録に失敗しました。')
+            }
+        }
+
+        if (source === 'flashcard') {
+            await supabase.from('flashcard_attempts').insert({
+                user_id: userId,
+                review_material_id: materialId || null,
+                subject: (task.review_materials as any)?.subject ?? (task.study_logs as any)?.subject ?? '',
+                content: theme,
+                rating: effectiveRating,
+            }).then(({ error }) => { if (error) console.warn('flashcard_attempts insert skipped:', error.message) })
+        } else if (source === 'quiz') {
+            const quiz = quizByTask[taskId]
+            const themeQuiz = quiz?.themes[theme]
+            if (themeQuiz?.attemptIds && Object.keys(themeQuiz.attemptIds).length > 0) {
+                const promises = Object.values(themeQuiz.attemptIds).map((attemptId) =>
+                    supabase.from('quiz_attempts').update({ rating: effectiveRating }).eq('id', attemptId)
+                )
+                await Promise.all(promises).then((results) => {
+                    results.forEach(({ error: err }) => { if (err) console.warn('quiz_attempts update skipped:', err.message) })
+                })
+            } else {
+                await supabase
+                    .from('quiz_attempts')
+                    .update({ rating: effectiveRating })
+                    .eq('review_task_id', taskId)
+                    .is('rating', null)
+                    .then(({ error: err }) => { if (err) console.warn('quiz_attempts rating update (by task) skipped:', err?.message) })
             }
         }
 
@@ -1229,7 +1491,7 @@ export function ReviewScreen() {
 
         // choiceIndex === -1 は「わからない」ボタン → 必ず不正解扱い
         const isCorrect = choiceIndex !== -1 && choiceIndex === question.correct_index
-        await supabase.from('quiz_attempts').insert({
+        const doInsert = () => supabase.from('quiz_attempts').insert({
             user_id: userId,
             review_task_id: taskId,
             question: question.question,
@@ -1237,13 +1499,34 @@ export function ReviewScreen() {
             correct_index: question.correct_index,
             selected_index: choiceIndex,
             is_correct: isCorrect,
-        })
+            explanation: question.explanation || null,
+            theme: theme,
+        }).select('id').single()
+
+        const { data, error } = await doInsert()
+        if (error) {
+            const { data: retryData, error: retryError } = await doInsert()
+            if (retryError) {
+                Alert.alert('記録に失敗しました', '解答を記録できませんでした。もう一度選択してください。')
+                return
+            }
+            if (retryData?.id) {
+                const nextAnswers = { ...themeQuiz.answers, [qIndex]: choiceIndex }
+                const nextAttemptIds = { ...(themeQuiz.attemptIds || {}), [qIndex]: retryData.id }
+                const nextThemes = { ...(quiz?.themes || {}), [theme]: { ...themeQuiz, answers: nextAnswers, attemptIds: nextAttemptIds } }
+                setQuizByTask((prev) => ({ ...prev, [taskId]: { themes: nextThemes } }))
+            } else {
+                const nextAnswers = { ...themeQuiz.answers, [qIndex]: choiceIndex }
+                const nextThemes = { ...(quiz?.themes || {}), [theme]: { ...themeQuiz, answers: nextAnswers } }
+                setQuizByTask((prev) => ({ ...prev, [taskId]: { themes: nextThemes } }))
+            }
+            return
+        }
 
         const nextAnswers = { ...themeQuiz.answers, [qIndex]: choiceIndex }
-        const nextThemes = { ...(quiz?.themes || {}), [theme]: { ...themeQuiz, answers: nextAnswers } }
+        const nextAttemptIds = data?.id != null ? { ...(themeQuiz.attemptIds || {}), [qIndex]: data.id } : (themeQuiz.attemptIds || {})
+        const nextThemes = { ...(quiz?.themes || {}), [theme]: { ...themeQuiz, answers: nextAnswers, attemptIds: nextAttemptIds } }
         setQuizByTask((prev) => ({ ...prev, [taskId]: { themes: nextThemes } }))
-
-
     }
 
     const handleSkipTask = async (taskId: string) => {
@@ -1338,30 +1621,40 @@ export function ReviewScreen() {
     }
 
     const handleCreate = async () => {
-        if (!selectedBookId) {
+        const effectiveBookId = createModalBookLockedId ?? selectedBookId
+        if (!effectiveBookId) {
             Alert.alert('エラー', '教材を選択してください')
             return
         }
 
-        const selectedBook = referenceBooks.find((b) => b.id === selectedBookId)
+        const selectedBook = referenceBooks.find((b) => b.id === effectiveBookId)
         const subject = selectedBook ? selectedBook.name : 'その他'
 
-        let noteValue = ''
-        if (createMode === 'ai') {
-            const validNotes = aiNotes.filter((n) => n.trim())
-            if (validNotes.length === 0) {
-                Alert.alert('エラー', '最低1つのメモを入力してください')
-                return
-            }
-            noteValue = validNotes.map((n) => `・${n.trim()}`).join('\n')
-        } else {
-            const validCards = flashcards.filter((c) => c.question.trim() && c.answer.trim())
-            if (validCards.length === 0) {
-                Alert.alert('エラー', '最低1枚のカードを作成してください')
-                return
-            }
-            noteValue = validCards.map((c) => `${c.question.trim()} : ${c.answer.trim()}`).join('\n')
+        // AIメモ（有効なもの）
+        const validNotes = aiNotes.filter((n) => n.trim())
+        const aiPart = validNotes.map((n) => `・${n.trim()}`).join('\n')
+
+        // 単語帳カード（有効なもの）
+        const validCards = flashcards.filter((c) => c.question.trim() && c.answer.trim())
+        const flashcardPart = validCards.map((c) => `${c.question.trim()} : ${c.answer.trim()}`).join('\n')
+
+        // 両方なければエラー
+        if (!aiPart && !flashcardPart) {
+            Alert.alert('エラー', 'AIメモか単語帳カードを最低1つ入力してください')
+            return
         }
+
+        // 両方あれば結合（AIメモ → 単語帳の順）
+        const noteValue = [aiPart, flashcardPart].filter(Boolean).join('\n')
+
+        // 1テーマ1件で保存するためテーマごとに分割（既存データ互換のためスキーマ変更なし）
+        const themeLines = noteValue
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => line.replace(/^[-*•・]\s*/, '').trim())
+            .filter(Boolean)
+        const themes = themeLines.length > 0 ? themeLines : [noteValue.trim() || '全体復習']
 
         setLoading(true)
 
@@ -1372,37 +1665,43 @@ export function ReviewScreen() {
         const dateStr = `${year}-${month}-${day}`
         const studyDayDate = getStudyDayDate(dateStr)
         const startedAtIso = new Date(studyDayDate.getTime() + 9 * 60 * 60 * 1000).toISOString()
+        const firstDueDate = new Date(studyDayDate.getTime() + 24 * 60 * 60 * 1000)
 
-        const { data, error } = await supabase
-            .from('review_materials')
-            .insert({
-                user_id: userId,
-                subject: subject,
-                content: noteValue,
-                reference_book_id: selectedBookId || null,
-                study_date: startedAtIso,
-            })
-            .select()
-            .single()
+        for (const themeContent of themes) {
+            const { data, error } = await supabase
+                .from('review_materials')
+                .insert({
+                    user_id: userId,
+                    subject: subject,
+                    content: themeContent,
+                    reference_book_id: effectiveBookId || null,
+                    study_date: startedAtIso,
+                    sm2_interval: 1,
+                    sm2_ease_factor: 2.5,
+                    sm2_repetitions: 1,
+                })
+                .select()
+                .single()
 
-        if (error) {
-            Alert.alert('保存エラー', error.message)
-            setLoading(false)
-            return
-        }
+            if (error) {
+                Alert.alert('保存エラー', error.message)
+                setLoading(false)
+                return
+            }
 
-        if (data?.id) {
-            // 選択した学習日の「翌日」を初回復習日にする（昨日で登録→今日から解ける）
-            const firstDueDate = new Date(studyDayDate.getTime() + 24 * 60 * 60 * 1000)
-            const { error: taskError } = await supabase.from('review_tasks').insert({
-                user_id: userId,
-                review_material_id: data.id,
-                due_at: firstDueDate.toISOString(),
-                status: 'pending',
-            })
-            if (taskError) {
-                console.error(taskError)
-                Alert.alert('タスク作成エラー', 'タスク作成に失敗しました')
+            if (data?.id) {
+                const { error: taskError } = await supabase.from('review_tasks').insert({
+                    user_id: userId,
+                    review_material_id: data.id,
+                    due_at: firstDueDate.toISOString(),
+                    status: 'pending',
+                })
+                if (taskError) {
+                    console.error(taskError)
+                    Alert.alert('タスク作成エラー', 'タスク作成に失敗しました')
+                    setLoading(false)
+                    return
+                }
             }
         }
 
@@ -1411,6 +1710,7 @@ export function ReviewScreen() {
         setAiNotes([''])
         setFlashcards([{ question: '', answer: '' }])
         setShowCreateModal(false)
+        setCreateModalBookLockedId(null)
         setCreateMode('ai')
         loadTasks()
         loadFutureTasks()
@@ -1561,17 +1861,245 @@ export function ReviewScreen() {
         return Object.values(groups).sort((a, b) => a.date.localeCompare(b.date))
     }, [futureTasks, selectedSubjectKey])
 
+    const groupedQuizHistory = useMemo(() => {
+        type TrendAttempt = {
+            id: string
+            created_at: string
+            is_correct: boolean
+            rating: 'perfect' | 'good' | 'hard' | null
+            question: string
+            explanation: string | null
+            choices: string[]
+            selected_index: number
+            correct_index: number
+        }
+        type TrendGroup = {
+            key: string
+            subject: string
+            theme: string
+            latestCreatedAt: string
+            attempts: TrendAttempt[]
+            sm2_interval: number | null
+            sm2_ease_factor: number | null
+            sm2_repetitions: number | null
+        }
+
+        const toMillis = (dateString: string) => {
+            const time = new Date(dateString).getTime()
+            return Number.isNaN(time) ? 0 : time
+        }
+
+        const groups: Record<string, TrendGroup> = {}
+        quizHistory.forEach((item) => {
+            const subject = (item.subject || '—').trim() || '—'
+            const theme = (item.theme || item.question || '未分類').trim() || '未分類'
+            const key = `${subject}\n${theme}`
+            if (!groups[key]) {
+                groups[key] = {
+                    key,
+                    subject,
+                    theme,
+                    latestCreatedAt: item.created_at,
+                    attempts: [],
+                    sm2_interval: item.sm2_interval ?? null,
+                    sm2_ease_factor: item.sm2_ease_factor ?? null,
+                    sm2_repetitions: item.sm2_repetitions ?? null,
+                }
+            }
+
+            const current = groups[key]
+            if (toMillis(item.created_at) > toMillis(current.latestCreatedAt)) {
+                current.latestCreatedAt = item.created_at
+            }
+            if (current.sm2_interval == null && item.sm2_interval != null) current.sm2_interval = item.sm2_interval
+            if (current.sm2_ease_factor == null && item.sm2_ease_factor != null) current.sm2_ease_factor = item.sm2_ease_factor
+            if (current.sm2_repetitions == null && item.sm2_repetitions != null) current.sm2_repetitions = item.sm2_repetitions
+
+            current.attempts.push({
+                id: item.id,
+                created_at: item.created_at,
+                is_correct: item.is_correct,
+                rating: item.rating ?? null,
+                question: item.question,
+                explanation: item.explanation ?? null,
+                choices: item.choices ?? [],
+                selected_index: item.selected_index,
+                correct_index: item.correct_index,
+            })
+        })
+
+        const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+
+        return Object.values(groups)
+            .map((group) => {
+                const attempts = [...group.attempts].sort((a, b) => toMillis(a.created_at) - toMillis(b.created_at))
+                const latestAttempt = attempts[attempts.length - 1] ?? null
+                const correctCount = attempts.filter((a) => a.is_correct).length
+                const recentCorrectRatio = attempts.length > 0 ? correctCount / attempts.length : 0
+
+                let retentionScore = Math.round(recentCorrectRatio * 100)
+                if (
+                    group.sm2_interval != null
+                    && group.sm2_ease_factor != null
+                    && group.sm2_repetitions != null
+                ) {
+                    const intervalNorm = clamp(group.sm2_interval / 14, 0, 1)
+                    const easeNorm = clamp((group.sm2_ease_factor - 1.3) / (2.8 - 1.3), 0, 1)
+                    const repetitionNorm = clamp(group.sm2_repetitions / 8, 0, 1)
+                    retentionScore = Math.round((intervalNorm * 0.45 + easeNorm * 0.2 + repetitionNorm * 0.35) * 100)
+                }
+
+                const retentionLabel = retentionScore >= 75 ? '高' : retentionScore >= 45 ? '中' : '低'
+                const retentionColor = retentionScore >= 75 ? '#16a34a' : retentionScore >= 45 ? '#d97706' : '#dc2626'
+
+                return {
+                    ...group,
+                    attempts,
+                    latestAttempt,
+                    retentionScore,
+                    retentionLabel,
+                    retentionColor,
+                    recentCorrectRatio,
+                }
+            })
+            .sort((a, b) => toMillis(b.latestCreatedAt) - toMillis(a.latestCreatedAt))
+    }, [quizHistory])
+
+    const groupedFlashcardHistory = useMemo(() => {
+        type FlashcardTrendAttempt = {
+            id: string
+            created_at: string
+            rating: 'perfect' | 'good' | 'hard'
+        }
+        type FlashcardTrendGroup = {
+            key: string
+            subject: string
+            theme: string
+            content: string
+            latestCreatedAt: string
+            attempts: FlashcardTrendAttempt[]
+            sm2_interval: number | null
+            sm2_ease_factor: number | null
+            sm2_repetitions: number | null
+        }
+
+        const toMillis = (dateString: string) => {
+            const time = new Date(dateString).getTime()
+            return Number.isNaN(time) ? 0 : time
+        }
+
+        const groups: Record<string, FlashcardTrendGroup> = {}
+        flashcardHistory.forEach((item) => {
+            const subject = (item.subject || '—').trim() || '—'
+            const parsed = parseFlashcard(item.content)
+            const theme = (parsed.question || '未分類').trim() || '未分類'
+
+            const key = item.review_material_id ? `rm:${item.review_material_id}` : `${subject}\n${theme}`
+
+            if (!groups[key]) {
+                groups[key] = {
+                    key,
+                    subject,
+                    theme,
+                    content: item.content,
+                    latestCreatedAt: item.created_at,
+                    attempts: [],
+                    sm2_interval: item.sm2_interval ?? null,
+                    sm2_ease_factor: item.sm2_ease_factor ?? null,
+                    sm2_repetitions: item.sm2_repetitions ?? null,
+                }
+            }
+
+            const current = groups[key]
+            if (toMillis(item.created_at) > toMillis(current.latestCreatedAt)) {
+                current.latestCreatedAt = item.created_at
+            }
+            if (current.sm2_interval == null && item.sm2_interval != null) current.sm2_interval = item.sm2_interval
+            if (current.sm2_ease_factor == null && item.sm2_ease_factor != null) current.sm2_ease_factor = item.sm2_ease_factor
+            if (current.sm2_repetitions == null && item.sm2_repetitions != null) current.sm2_repetitions = item.sm2_repetitions
+
+            current.attempts.push({
+                id: item.id,
+                created_at: item.created_at,
+                rating: item.rating,
+            })
+        })
+
+        const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+
+        return Object.values(groups)
+            .map((group) => {
+                const attempts = [...group.attempts].sort((a, b) => toMillis(a.created_at) - toMillis(b.created_at))
+                const latestAttempt = attempts[attempts.length - 1] ?? null
+
+                const correctCount = attempts.filter((a) => a.rating === 'perfect' || a.rating === 'good').length
+                const recentCorrectRatio = attempts.length > 0 ? correctCount / attempts.length : 0
+
+                let retentionScore = Math.round(recentCorrectRatio * 100)
+                if (
+                    group.sm2_interval != null
+                    && group.sm2_ease_factor != null
+                    && group.sm2_repetitions != null
+                ) {
+                    const intervalNorm = clamp(group.sm2_interval / 14, 0, 1)
+                    const easeNorm = clamp((group.sm2_ease_factor - 1.3) / (2.8 - 1.3), 0, 1)
+                    const repetitionNorm = clamp(group.sm2_repetitions / 8, 0, 1)
+                    retentionScore = Math.round((intervalNorm * 0.45 + easeNorm * 0.2 + repetitionNorm * 0.35) * 100)
+                }
+
+                const retentionLabel = retentionScore >= 75 ? '高' : retentionScore >= 45 ? '中' : '低'
+                const retentionColor = retentionScore >= 75 ? '#16a34a' : retentionScore >= 45 ? '#d97706' : '#dc2626'
+
+                return {
+                    ...group,
+                    attempts,
+                    latestAttempt,
+                    retentionScore,
+                    retentionLabel,
+                    retentionColor,
+                    recentCorrectRatio,
+                }
+            })
+            .sort((a, b) => toMillis(b.latestCreatedAt) - toMillis(a.latestCreatedAt))
+    }, [flashcardHistory])
+
+    // フラッシュカード形式のテーマを自動的にflashcardModeへ
+    useEffect(() => {
+        const updates: Record<string, boolean> = {}
+        currentTasks.forEach((task) => {
+            let themes = splitThemes(task.study_logs?.note || '')
+            if (themes.length === 0) themes = ['全体復習']
+            themes.forEach((theme) => {
+                const themeKey = getThemeKey(task.id, theme)
+                const flashcard = parseFlashcard(theme)
+                if (flashcard.answer && !flashcardMode[themeKey]) {
+                    updates[themeKey] = true
+                }
+            })
+        })
+        if (Object.keys(updates).length > 0) {
+            setFlashcardMode((prev) => ({ ...prev, ...updates }))
+        }
+    }, [currentTasks])
+
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
             <View style={styles.card}>
                 <View style={styles.cardHeaderColumn}>
-                    <View style={[styles.headerTitleWrap, styles.headerTitleWrapTop]}>
-                        <Text style={styles.cardTitle}>復習カード</Text>
-                        <Text style={styles.cardSubtitle}>
-                            {(selectedSubjectKey)
-                                ? (selectedSubjectKey ? groupedTasks.find(g => g.key === selectedSubjectKey)?.title : groupedTasks[0]?.title)
-                                : '忘却曲線に合わせて今日の復習を出題します'}
-                        </Text>
+                    <View style={styles.headerRow}>
+                        <View style={[styles.headerTitleWrap, styles.headerTitleWrapTop]}>
+                            <Text style={styles.cardTitle}>復習カード</Text>
+                            <Text style={styles.cardSubtitle}>
+                                {(selectedSubjectKey)
+                                    ? (selectedSubjectKey ? groupedTasks.find(g => g.key === selectedSubjectKey)?.title : groupedTasks[0]?.title)
+                                    : '忘却曲線に合わせて今日の復習を出題します'}
+                            </Text>
+                        </View>
+                        {selectedSubjectKey ? (
+                            <Pressable style={styles.backButton} onPress={() => setSelectedSubjectKey(null)}>
+                                <Text style={styles.backButtonText}>戻る</Text>
+                            </Pressable>
+                        ) : null}
                     </View>
                     <View style={styles.headerButtons} pointerEvents="box-none">
                         <Pressable style={styles.contentButton} onPress={() => setShowContentModal(true)}>
@@ -1582,16 +2110,31 @@ export function ReviewScreen() {
                             <Ionicons name="calendar-outline" size={18} color="#3b82f6" />
                             <Text style={styles.futureButtonText}>予定</Text>
                         </Pressable>
-                        {(selectedSubjectKey) ? (
-                            <Pressable style={styles.backButton} onPress={() => setSelectedSubjectKey(null)}>
-                                <Text style={styles.backButtonText}>戻る</Text>
-                            </Pressable>
-                        ) : (
-                            <Pressable style={styles.createButton} onPress={() => setShowCreateModal(true)}>
-                                <Ionicons name="add-circle" size={20} color="#ffffff" />
-                                <Text style={styles.createButtonText}>作成</Text>
-                            </Pressable>
-                        )}
+                        <Pressable
+                            style={styles.futureButton}
+                            onPress={() => {
+                                setShowHistoryModal(true)
+                            }}
+                        >
+                            <Ionicons name="time-outline" size={18} color="#64748b" />
+                            <Text style={styles.futureButtonText}>履歴</Text>
+                        </Pressable>
+                        <Pressable
+                            style={styles.createButton}
+                            onPress={() => {
+                                if (selectedSubjectKey?.startsWith('book:')) {
+                                    const bookId = selectedSubjectKey.slice(5)
+                                    setSelectedBookId(bookId)
+                                    setCreateModalBookLockedId(bookId)
+                                } else {
+                                    setCreateModalBookLockedId(null)
+                                }
+                                setShowCreateModal(true)
+                            }}
+                        >
+                            <Ionicons name="add-circle" size={20} color="#ffffff" />
+                            <Text style={styles.createButtonText}>追加</Text>
+                        </Pressable>
                     </View>
                 </View>
                 {(loading || (groupedTasks.length === 0 && !loading)) ? (
@@ -1680,50 +2223,53 @@ export function ReviewScreen() {
                                                                 )}
                                                             </View>
                                                         </View>
-                                                        <Text style={styles.mutedText}>{theme}</Text>
-                                                        <View style={styles.difficultyRow}>
-                                                            <Text style={styles.difficultyLabel}>難易度</Text>
-                                                            {[
-                                                                { key: 'easy' as Difficulty, label: '易しい' },
-                                                                { key: 'normal' as Difficulty, label: '普通' },
-                                                                { key: 'hard' as Difficulty, label: '難しい' },
-                                                            ].map((item) => (
-                                                                <Pressable
-                                                                    key={item.key}
-                                                                    style={[
-                                                                        styles.difficultyButton,
-                                                                        selectedDifficulty === item.key && styles.difficultyButtonActive,
-                                                                    ]}
-                                                                    onPress={() =>
-                                                                        setDifficultyByTheme((prev) => ({ ...prev, [themeKey]: item.key }))
-                                                                    }
-                                                                >
-                                                                    <Text
+                                                        {!parseFlashcard(theme).answer && (
+                                                            <View style={styles.themeBadge}>
+                                                                <Ionicons name="pricetag-outline" size={12} color="#475569" />
+                                                                <Text style={styles.themeBadgeText} numberOfLines={1}>{theme}</Text>
+                                                            </View>
+                                                        )}
+                                                        {!parseFlashcard(theme).answer && (
+                                                            <View style={styles.difficultyRow}>
+                                                                <Text style={styles.difficultyLabel}>難易度</Text>
+                                                                {[
+                                                                    { key: 'easy' as Difficulty, label: '易しい' },
+                                                                    { key: 'normal' as Difficulty, label: '普通' },
+                                                                    { key: 'hard' as Difficulty, label: '難しい' },
+                                                                ].map((item) => (
+                                                                    <Pressable
+                                                                        key={item.key}
                                                                         style={[
-                                                                            styles.difficultyText,
-                                                                            selectedDifficulty === item.key && styles.difficultyTextActive,
+                                                                            styles.difficultyButton,
+                                                                            selectedDifficulty === item.key && styles.difficultyButtonActive,
                                                                         ]}
+                                                                        onPress={() =>
+                                                                            setDifficultyByTheme((prev) => ({ ...prev, [themeKey]: item.key }))
+                                                                        }
                                                                     >
-                                                                        {item.label}
-                                                                    </Text>
-                                                                </Pressable>
-                                                            ))}
-                                                        </View>
+                                                                        <Text
+                                                                            style={[
+                                                                                styles.difficultyText,
+                                                                                selectedDifficulty === item.key && styles.difficultyTextActive,
+                                                                            ]}
+                                                                        >
+                                                                            {item.label}
+                                                                        </Text>
+                                                                    </Pressable>
+                                                                ))}
+                                                            </View>
+                                                        )}
 
                                                         {!themeQuiz && !flashcardMode[themeKey] && (() => {
                                                             const flashcard = parseFlashcard(theme)
-                                                            // フラッシュカードモード（答えあり）: フラッシュカードボタンのみ
+                                                            // フラッシュカードモード（答えあり）: useEffectで自動起動するため何も表示しない
                                                             if (flashcard.answer) {
-                                                                return (
-                                                                    <Pressable style={[styles.outlineButton, styles.flashcardButton]} onPress={() => handleFlashcardReview(task.id, theme)}>
-                                                                        <Text style={[styles.outlineButtonText, styles.flashcardButtonText]}>フラッシュカードで復習</Text>
-                                                                    </Pressable>
-                                                                )
+                                                                return null
                                                             }
                                                             // AIモード（答えなし）: AIクイズボタンのみ
                                                             return (
                                                                 <Pressable style={styles.outlineButton} onPress={() => handleGenerateQuiz(task, theme)}>
-                                                                    <Text style={styles.outlineButtonText}>AIクイズを作成（1問）</Text>
+                                                                    <Text style={styles.outlineButtonText}>AIクイズを作成</Text>
                                                                 </Pressable>
                                                             )
                                                         })()}
@@ -1748,13 +2294,13 @@ export function ReviewScreen() {
                                                                         </Pressable>
                                                                     ) : (
                                                                         <View style={styles.flashcardActions}>
-                                                                            <Pressable style={[styles.outlineButton, styles.perfectButton]} onPress={() => handleSM2Rating(task.id, theme, 'perfect')}>
+                                                                            <Pressable style={[styles.outlineButton, styles.perfectButton]} onPress={() => handleSM2Rating(task.id, theme, 'perfect', 'flashcard')}>
                                                                                 <Text style={[styles.outlineButtonText, styles.perfectButtonText]}>完璧 ⭐</Text>
                                                                             </Pressable>
-                                                                            <Pressable style={[styles.outlineButton, styles.goodButton]} onPress={() => handleSM2Rating(task.id, theme, 'good')}>
+                                                                            <Pressable style={[styles.outlineButton, styles.goodButton]} onPress={() => handleSM2Rating(task.id, theme, 'good', 'flashcard')}>
                                                                                 <Text style={[styles.outlineButtonText, styles.goodButtonText]}>うろ覚え 🤔</Text>
                                                                             </Pressable>
-                                                                            <Pressable style={[styles.outlineButton, styles.hardButton]} onPress={() => handleSM2Rating(task.id, theme, 'hard')}>
+                                                                            <Pressable style={[styles.outlineButton, styles.hardButton]} onPress={() => handleSM2Rating(task.id, theme, 'hard', 'flashcard')}>
                                                                                 <Text style={[styles.outlineButtonText, styles.hardButtonText]}>苦手 😓</Text>
                                                                             </Pressable>
                                                                         </View>
@@ -1762,7 +2308,36 @@ export function ReviewScreen() {
                                                                 </View>
                                                             )
                                                         })()}
-                                                        {themeQuiz?.loading && <Text style={styles.mutedText}>クイズ作成中...</Text>}
+                                                        {themeQuiz?.loading && (
+                                                            <View style={{
+                                                                flexDirection: 'row',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                backgroundColor: '#eff6ff',
+                                                                paddingVertical: 16,
+                                                                paddingHorizontal: 20,
+                                                                borderRadius: 12,
+                                                                marginTop: 12,
+                                                                marginBottom: 8,
+                                                                borderWidth: 1,
+                                                                borderColor: '#bfdbfe',
+                                                                shadowColor: '#3b82f6',
+                                                                shadowOffset: { width: 0, height: 2 },
+                                                                shadowOpacity: 0.1,
+                                                                shadowRadius: 4,
+                                                                elevation: 2
+                                                            }}>
+                                                                <ActivityIndicator size="small" color="#3b82f6" style={{ marginRight: 12 }} />
+                                                                <Text style={{
+                                                                    color: '#1d4ed8',
+                                                                    fontSize: 15,
+                                                                    fontWeight: '600',
+                                                                    letterSpacing: 0.5
+                                                                }}>
+                                                                    問題を作成中...
+                                                                </Text>
+                                                            </View>
+                                                        )}
                                                         {themeQuiz?.questions?.length > 0 && (
                                                             <View style={styles.quizBlock}>
                                                                 {themeQuiz.questions.map((q, qIndex) => {
@@ -1854,7 +2429,7 @@ export function ReviewScreen() {
                                                                                             return (
                                                                                                 <Pressable
                                                                                                     style={[styles.outlineButton, styles.hardButton, { marginTop: 12 }]}
-                                                                                                    onPress={() => handleSM2Rating(task.id, theme, 'hard')}
+                                                                                                    onPress={() => handleSM2Rating(task.id, theme, 'hard', 'quiz')}
                                                                                                 >
                                                                                                     <Text style={[styles.outlineButtonText, styles.hardButtonText]}>次へ（不正解のため明日に再復習）</Text>
                                                                                                 </Pressable>
@@ -1864,13 +2439,13 @@ export function ReviewScreen() {
                                                                                                 <View style={[styles.flashcardActions, { marginTop: 12 }]}>
                                                                                                     <Pressable
                                                                                                         style={[styles.outlineButton, styles.perfectButton, { flex: 1 }]}
-                                                                                                        onPress={() => handleSM2Rating(task.id, theme, 'perfect')}
+                                                                                                        onPress={() => handleSM2Rating(task.id, theme, 'perfect', 'quiz')}
                                                                                                     >
                                                                                                         <Text style={[styles.outlineButtonText, styles.perfectButtonText]}>完璧 ⭐</Text>
                                                                                                     </Pressable>
                                                                                                     <Pressable
                                                                                                         style={[styles.outlineButton, styles.goodButton, { flex: 1 }]}
-                                                                                                        onPress={() => handleSM2Rating(task.id, theme, 'good')}
+                                                                                                        onPress={() => handleSM2Rating(task.id, theme, 'good', 'quiz')}
                                                                                                     >
                                                                                                         <Text style={[styles.outlineButtonText, styles.goodButtonText]}>うろ覚え 🤔</Text>
                                                                                                     </Pressable>
@@ -1926,18 +2501,18 @@ export function ReviewScreen() {
                 onRequestClose={() => setShowFutureModal(false)}
             >
                 <View style={styles.futureModalRoot}>
-                    <ScrollView style={styles.futureModalBody} contentContainerStyle={styles.futureModalBodyContent} showsVerticalScrollIndicator={false}>
-                        <View style={styles.futureModalHeader}>
-                            <View style={styles.futureModalTitleRow}>
-                                <View style={styles.futureModalTitleIcon}>
-                                    <Ionicons name="calendar" size={22} color="#3b82f6" />
-                                </View>
-                                <Text style={styles.futureModalTitle}>明日以降の復習予定</Text>
+                    <View style={styles.futureModalHeader}>
+                        <View style={styles.futureModalTitleRow}>
+                            <View style={styles.futureModalTitleIcon}>
+                                <Ionicons name="calendar" size={22} color="#3b82f6" />
                             </View>
-                            <Pressable onPress={() => setShowFutureModal(false)} style={styles.futureModalCloseButton} hitSlop={12}>
-                                <Ionicons name="close" size={24} color="#64748b" />
-                            </Pressable>
+                            <Text style={styles.futureModalTitle}>明日以降の復習予定</Text>
                         </View>
+                        <Pressable onPress={() => setShowFutureModal(false)} style={styles.backButton}>
+                            <Text style={styles.backButtonText}>戻る</Text>
+                        </Pressable>
+                    </View>
+                    <ScrollView style={styles.futureModalBody} contentContainerStyle={styles.futureModalBodyContent} showsVerticalScrollIndicator={false}>
                         {futureTasksLoading ? (
                             <View style={styles.futureEmptyState}>
                                 <Text style={styles.futureEmptyText}>読み込み中...</Text>
@@ -1977,6 +2552,339 @@ export function ReviewScreen() {
                 </View>
             </Modal>
 
+            {/* 履歴モーダル（プレミアムデザイン） */}
+            <Modal
+                visible={showHistoryModal}
+                animationType="slide"
+                transparent={false}
+                onRequestClose={() => setShowHistoryModal(false)}
+            >
+                <View style={styles.historyPremiumRoot}>
+                    <View style={styles.historyPremiumHeader}>
+                        <View style={styles.historyPremiumTitleRow}>
+                            <View style={styles.historyPremiumTitleIcon}>
+                                <Ionicons name="time" size={22} color="#10b981" />
+                            </View>
+                            <Text style={styles.historyPremiumTitle}>復習履歴</Text>
+                        </View>
+                        <View style={styles.historyPremiumHeaderActions}>
+                            <Pressable onPress={() => loadHistory()} style={styles.historyPremiumRefreshBtn} hitSlop={12} disabled={historyLoading}>
+                                <Ionicons name="refresh" size={22} color={historyLoading ? '#94a3b8' : '#64748b'} />
+                            </Pressable>
+                            <Pressable onPress={() => setShowHistoryModal(false)} style={styles.backButton}>
+                                <Text style={styles.backButtonText}>戻る</Text>
+                            </Pressable>
+                        </View>
+                    </View>
+                    <ScrollView style={styles.historyPremiumBody} contentContainerStyle={styles.historyPremiumBodyContent} showsVerticalScrollIndicator={false}>
+
+                        <View style={styles.historyTabsContainer}>
+                            <Pressable
+                                style={[styles.historyTab, historyTab === 'ai' && styles.historyTabActive]}
+                                onPress={() => setHistoryTab('ai')}
+                            >
+                                <Ionicons name="scan-circle-outline" size={18} color={historyTab === 'ai' ? '#2563eb' : '#64748b'} />
+                                <Text style={[styles.historyTabText, historyTab === 'ai' && styles.historyTabTextActive]}>AIモード</Text>
+                            </Pressable>
+                            <Pressable
+                                style={[styles.historyTab, historyTab === 'flashcard' && styles.historyTabActive]}
+                                onPress={() => setHistoryTab('flashcard')}
+                            >
+                                <Ionicons name="albums-outline" size={18} color={historyTab === 'flashcard' ? '#2563eb' : '#64748b'} />
+                                <Text style={[styles.historyTabText, historyTab === 'flashcard' && styles.historyTabTextActive]}>単語帳</Text>
+                            </Pressable>
+                        </View>
+
+                        <View>
+                            {historyErrorMessage && (
+                                <View style={styles.historyPremiumErrorBox}>
+                                    <Ionicons name="alert-circle" size={18} color="#b91c1c" />
+                                    <Text style={styles.historyPremiumErrorText}>{historyErrorMessage}</Text>
+                                </View>
+                            )}
+                            {historyLoading ? (
+                                <View style={styles.historyPremiumEmptyState}>
+                                    <ActivityIndicator size="large" color="#10b981" />
+                                </View>
+                            ) : historyTab === 'ai' ? (
+                                groupedQuizHistory.length === 0 ? (
+                                    <View style={styles.historyPremiumEmptyState}>
+                                        <View style={styles.historyPremiumEmptyIconWrap}>
+                                            <Ionicons name="document-text-outline" size={52} color="#cbd5e1" />
+                                        </View>
+                                        <Text style={styles.historyPremiumEmptyText}>AI問題の記録がありません</Text>
+                                        <Text style={styles.historyPremiumEmptySubtext}>クイズを解くとここに表示されます</Text>
+                                    </View>
+                                ) : (
+                                    groupedQuizHistory.map((group) => (
+                                        <View key={group.key} style={styles.historyPremiumCard}>
+                                            <View style={styles.historyPremiumCardHeader}>
+                                                <Text style={styles.historyPremiumDate}>{formatHistoryDate(group.latestCreatedAt)}</Text>
+                                                <View style={styles.historyPremiumSubjectBadge}>
+                                                    <Text style={styles.historyPremiumSubjectText}>{group.subject}</Text>
+                                                </View>
+                                            </View>
+                                            <Text style={styles.historyPremiumTheme}>{group.theme}</Text>
+                                            <View style={styles.historyTrendMetaRow}>
+                                                <Text style={styles.historyTrendMetaText}>解答回数: {group.attempts.length}回</Text>
+                                                <Text style={styles.historyTrendMetaText}>正答率: {Math.round(group.recentCorrectRatio * 100)}%</Text>
+                                            </View>
+                                            <View style={styles.historyPremiumDivider} />
+
+                                            <View style={styles.historyRetentionSection}>
+                                                <View style={styles.historyRetentionHeader}>
+                                                    <Text style={styles.historyRetentionTitle}>記憶定着度（SM-2）</Text>
+                                                    <Text style={[styles.historyRetentionPercent, { color: group.retentionColor }]}>
+                                                        {group.retentionScore}%（{group.retentionLabel}）
+                                                    </Text>
+                                                </View>
+                                                <View style={styles.historyRetentionTrack}>
+                                                    <View
+                                                        style={[
+                                                            styles.historyRetentionFill,
+                                                            { width: `${group.retentionScore}%`, backgroundColor: group.retentionColor },
+                                                        ]}
+                                                    />
+                                                </View>
+                                            </View>
+
+                                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.historyTrendScrollContent}>
+                                                {group.attempts.map((attempt, idx) => {
+                                                    let label = '不正解'
+                                                    let chipColor = '#ef4444' // red
+                                                    let chipBg = '#fef2f2'
+
+                                                    if (attempt.is_correct) {
+                                                        if (attempt.rating === 'good') {
+                                                            label = 'うろ覚え'
+                                                            chipColor = '#d97706' // orange/yellow
+                                                            chipBg = '#fef3c7'
+                                                        } else {
+                                                            label = '完璧'
+                                                            chipColor = '#16a34a' // green
+                                                            chipBg = '#ecfdf5'
+                                                        }
+                                                    }
+                                                    return (
+                                                        <View key={attempt.id} style={styles.historyTrendStep}>
+                                                            <View style={[styles.historyTrendChip, { backgroundColor: chipBg, borderColor: chipColor }]}>
+                                                                <Ionicons
+                                                                    name={attempt.is_correct ? 'checkmark-circle' : 'close-circle'}
+                                                                    size={16}
+                                                                    color={chipColor}
+                                                                />
+                                                                <Text style={[styles.historyTrendChipText, { color: chipColor }]}>{label}</Text>
+                                                                <Text style={styles.historyTrendChipDate}>{formatHistoryDate(attempt.created_at)}</Text>
+                                                            </View>
+                                                            {idx < group.attempts.length - 1 && (
+                                                                <Ionicons name="chevron-forward" size={16} color="#94a3b8" style={styles.historyTrendArrow} />
+                                                            )}
+                                                        </View>
+                                                    )
+                                                })}
+                                            </ScrollView>
+
+                                            {group.attempts.length > 0 && (
+                                                <View style={styles.historyPremiumExplanationBox}>
+                                                    {/* 最新の試行をデフォルト表示 */}
+                                                    <Text style={styles.historyPremiumExplanationLabel}>直近の問題</Text>
+                                                    <Text style={styles.historyPremiumExplanationText}>{group.latestAttempt?.question}</Text>
+
+                                                    {group.latestAttempt?.choices && group.latestAttempt.choices.length > 0 && (
+                                                        <View style={{ marginTop: 8, gap: 6 }}>
+                                                            {group.latestAttempt.choices.map((choice, cIndex) => {
+                                                                const hasSelected = group.latestAttempt!.selected_index >= 0 && group.latestAttempt!.selected_index < group.latestAttempt!.choices.length
+                                                                const hasCorrect = group.latestAttempt!.correct_index >= 0 && group.latestAttempt!.correct_index < group.latestAttempt!.choices.length
+                                                                const isSelected = hasSelected && cIndex === group.latestAttempt!.selected_index
+                                                                const isCorrectChoice = hasCorrect && cIndex === group.latestAttempt!.correct_index
+                                                                let choiceStyle: any = styles.historyPremiumChoice
+                                                                if (isCorrectChoice) {
+                                                                    choiceStyle = [styles.historyPremiumChoice, styles.historyPremiumChoiceCorrect]
+                                                                } else if (isSelected) {
+                                                                    choiceStyle = [styles.historyPremiumChoice, styles.historyPremiumChoiceWrong]
+                                                                }
+                                                                return (
+                                                                    <View key={cIndex} style={choiceStyle}>
+                                                                        <Text style={[styles.historyPremiumChoiceText, isCorrectChoice && { color: '#166534', fontWeight: 'bold' }, isSelected && !isCorrectChoice && { color: '#991b1b' }]}>
+                                                                            {choice}
+                                                                        </Text>
+                                                                    </View>
+                                                                )
+                                                            })}
+                                                        </View>
+                                                    )}
+
+                                                    {group.latestAttempt?.explanation && (
+                                                        <>
+                                                            <Text style={[styles.historyPremiumExplanationLabel, { marginTop: 12 }]}>直近の解説</Text>
+                                                            <Text style={styles.historyPremiumExplanationText}>{group.latestAttempt.explanation}</Text>
+                                                        </>
+                                                    )}
+
+                                                    {group.attempts.length > 1 && (
+                                                        <Pressable
+                                                            style={styles.historyMoreButton}
+                                                            onPress={() =>
+                                                                setExpandedHistoryGroups((prev) => ({
+                                                                    ...prev,
+                                                                    [group.key]: !prev[group.key],
+                                                                }))
+                                                            }
+                                                        >
+                                                            <Text style={styles.historyMoreButtonText}>
+                                                                {expandedHistoryGroups[group.key] ? '詳細を閉じる' : `過去 ${group.attempts.length - 1} 回の出題を見る`}
+                                                            </Text>
+                                                        </Pressable>
+                                                    )}
+
+                                                    {/* 過去すべての試行を展開表示 */}
+                                                    {expandedHistoryGroups[group.key] && (
+                                                        <View style={styles.historyAttemptsList}>
+                                                            {[...group.attempts].reverse().map((attempt, idx) => (
+                                                                <View key={attempt.id} style={styles.historyAttemptItem}>
+                                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                                                        <Ionicons name={attempt.is_correct ? "checkmark-circle" : "close-circle"} size={16} color={attempt.is_correct ? "#16a34a" : "#ef4444"} />
+                                                                        <Text style={styles.historyAttemptTitle}>
+                                                                            {group.attempts.length - Math.abs(idx)}回目（{formatHistoryDate(attempt.created_at)}）
+                                                                        </Text>
+                                                                    </View>
+                                                                    <Text style={styles.historyAttemptQuestion}>{attempt.question}</Text>
+                                                                    {attempt.choices?.length > 0 && (
+                                                                        <View style={styles.historyAttemptChoices}>
+                                                                            {attempt.choices.map((choice, cIndex) => {
+                                                                                const hasSelected = attempt.selected_index >= 0 && attempt.selected_index < attempt.choices.length
+                                                                                const hasCorrect = attempt.correct_index >= 0 && attempt.correct_index < attempt.choices.length
+                                                                                const isSelected = hasSelected && cIndex === attempt.selected_index
+                                                                                const isCorrectChoice = hasCorrect && cIndex === attempt.correct_index
+                                                                                let choiceStyle: any = [styles.historyPremiumChoice, { paddingVertical: 8, paddingHorizontal: 12 }]
+                                                                                if (isCorrectChoice) {
+                                                                                    choiceStyle.push(styles.historyPremiumChoiceCorrect)
+                                                                                } else if (isSelected) {
+                                                                                    choiceStyle.push(styles.historyPremiumChoiceWrong)
+                                                                                }
+                                                                                return (
+                                                                                    <View key={cIndex} style={choiceStyle}>
+                                                                                        <Text style={[styles.historyPremiumChoiceText, { fontSize: 13 }, isCorrectChoice && { color: '#166534', fontWeight: 'bold' }, isSelected && !isCorrectChoice && { color: '#991b1b' }]}>
+                                                                                            {choice}
+                                                                                        </Text>
+                                                                                    </View>
+                                                                                )
+                                                                            })}
+                                                                        </View>
+                                                                    )}
+                                                                    {attempt.explanation && (
+                                                                        <>
+                                                                            <Text style={[styles.historyPremiumExplanationLabel, { marginTop: 8, fontSize: 11 }]}>解説</Text>
+                                                                            <Text style={styles.historyAttemptExplanation}>{attempt.explanation}</Text>
+                                                                        </>
+                                                                    )}
+                                                                </View>
+                                                            ))}
+                                                        </View>
+                                                    )}
+                                                </View>
+                                            )}
+                                        </View>
+                                    ))
+                                )
+                            ) : (
+                                groupedFlashcardHistory.length === 0 ? (
+                                    <View style={styles.historyPremiumEmptyState}>
+                                        <View style={styles.historyPremiumEmptyIconWrap}>
+                                            <Ionicons name="albums-outline" size={52} color="#cbd5e1" />
+                                        </View>
+                                        <Text style={styles.historyPremiumEmptyText}>単語帳の記録がありません</Text>
+                                        <Text style={styles.historyPremiumEmptySubtext}>単語帳を学習するとここに表示されます</Text>
+                                    </View>
+                                ) : (
+                                    groupedFlashcardHistory.map((group) => {
+                                        const { question, answer } = parseFlashcard(group.content)
+                                        return (
+                                            <View key={group.key} style={styles.historyPremiumCard}>
+                                                <View style={styles.historyPremiumCardHeader}>
+                                                    <Text style={styles.historyPremiumDate}>{formatHistoryDate(group.latestCreatedAt)}</Text>
+                                                    <View style={styles.historyPremiumSubjectBadge}>
+                                                        <Text style={styles.historyPremiumSubjectText}>{group.subject}</Text>
+                                                    </View>
+                                                </View>
+                                                <Text style={styles.historyPremiumTheme}>{group.theme}</Text>
+                                                <View style={styles.historyTrendMetaRow}>
+                                                    <Text style={styles.historyTrendMetaText}>学習回数: {group.attempts.length}回</Text>
+                                                    <Text style={styles.historyTrendMetaText}>定着率: {Math.round(group.recentCorrectRatio * 100)}%</Text>
+                                                </View>
+                                                <View style={styles.historyPremiumDivider} />
+
+                                                <View style={styles.historyRetentionSection}>
+                                                    <View style={styles.historyRetentionHeader}>
+                                                        <Text style={styles.historyRetentionTitle}>記憶定着度（SM-2）</Text>
+                                                        <Text style={[styles.historyRetentionPercent, { color: group.retentionColor }]}>
+                                                            {group.retentionScore}%（{group.retentionLabel}）
+                                                        </Text>
+                                                    </View>
+                                                    <View style={styles.historyRetentionTrack}>
+                                                        <View
+                                                            style={[
+                                                                styles.historyRetentionFill,
+                                                                { width: `${group.retentionScore}%`, backgroundColor: group.retentionColor },
+                                                            ]}
+                                                        />
+                                                    </View>
+                                                </View>
+
+                                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.historyTrendScrollContent}>
+                                                    {group.attempts.map((attempt, idx) => {
+                                                        const ratingLabel = attempt.rating === 'perfect' ? '完璧' : attempt.rating === 'good' ? 'うろ覚え' : '苦手'
+                                                        const ratingColor = attempt.rating === 'perfect' ? '#2563eb' : attempt.rating === 'good' ? '#d97706' : '#dc2626'
+                                                        const ratingBg = attempt.rating === 'perfect' ? '#dbeafe' : attempt.rating === 'good' ? '#fef3c7' : '#fee2e2'
+                                                        return (
+                                                            <View key={attempt.id} style={styles.historyTrendStep}>
+                                                                <View style={[styles.historyTrendChip, { backgroundColor: ratingBg, borderColor: ratingColor }]}>
+                                                                    <Ionicons
+                                                                        name="checkmark-circle"
+                                                                        size={16}
+                                                                        color={ratingColor}
+                                                                    />
+                                                                    <Text style={[styles.historyTrendChipText, { color: ratingColor }]}>{ratingLabel}</Text>
+                                                                    <Text style={styles.historyTrendChipDate}>{formatHistoryDate(attempt.created_at)}</Text>
+                                                                </View>
+                                                                {idx < group.attempts.length - 1 && (
+                                                                    <Ionicons name="chevron-forward" size={16} color="#94a3b8" style={styles.historyTrendArrow} />
+                                                                )}
+                                                            </View>
+                                                        )
+                                                    })}
+                                                </ScrollView>
+
+                                                <View style={styles.historyPremiumExplanationBox}>
+                                                    <Text style={styles.historyPremiumExplanationLabel}>カードの内容</Text>
+                                                    <View style={[styles.historyPremiumFlashcardQA, { padding: 0, marginTop: 12, backgroundColor: 'transparent', borderWidth: 0, shadowOpacity: 0 }]}>
+                                                        <View style={styles.historyPremiumFlashcardRow}>
+                                                            <View style={[styles.historyPremiumQABadge, { backgroundColor: '#eff6ff' }]}>
+                                                                <Text style={[styles.historyPremiumQABadgeText, { color: '#2563eb' }]}>Q</Text>
+                                                            </View>
+                                                            <Text style={styles.historyPremiumFlashcardQText}>{question}</Text>
+                                                        </View>
+                                                        {answer && (
+                                                            <View style={[styles.historyPremiumFlashcardRow, { marginTop: 16 }]}>
+                                                                <View style={[styles.historyPremiumQABadge, { backgroundColor: '#f0fdf4' }]}>
+                                                                    <Text style={[styles.historyPremiumQABadgeText, { color: '#16a34a' }]}>A</Text>
+                                                                </View>
+                                                                <Text style={styles.historyPremiumFlashcardAText}>{answer}</Text>
+                                                            </View>
+                                                        )}
+                                                    </View>
+                                                </View>
+
+                                            </View>
+                                        )
+                                    })
+                                )
+                            )}
+                        </View>
+                    </ScrollView>
+                </View>
+            </Modal>
+
             {/* 学習内容の確認・編集モーダル */}
             <Modal
                 visible={showContentModal}
@@ -1987,14 +2895,31 @@ export function ReviewScreen() {
                     setEditingContentTheme(null)
                 }}
             >
-                <KeyboardAvoidingView style={styles.contentModalRoot} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                    <ScrollView style={styles.contentModalBody} contentContainerStyle={styles.contentModalBodyContent} keyboardShouldPersistTaps="handled">
-                        <View style={styles.contentModalHeader}>
-                            <Text style={styles.contentModalTitle}>学習内容の確認・編集</Text>
-                            <Pressable onPress={() => { setShowContentModal(false); setEditingContentTheme(null) }} style={styles.contentModalClose} hitSlop={12}>
-                                <Ionicons name="close" size={24} color="#64748b" />
-                            </Pressable>
-                        </View>
+                <KeyboardAvoidingView
+                    style={{ flex: 1 }}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+                >
+                    <View style={styles.contentModalHeader}>
+                        <Text style={styles.contentModalTitle}>学習内容の確認・編集</Text>
+                        <Pressable onPress={() => { setShowContentModal(false); setEditingContentTheme(null) }} style={styles.backButton}>
+                            <Text style={styles.backButtonText}>戻る</Text>
+                        </Pressable>
+                    </View>
+                    <KeyboardAwareScrollView
+                        style={styles.contentModalRoot}
+                        contentContainerStyle={styles.contentModalBodyContent}
+                        keyboardShouldPersistTaps="handled"
+                        innerRef={(ref) => { contentModalKeyboardRef.current = ref }}
+                        onKeyboardWillShow={() => retryKeyboardAwareUpdate(contentModalKeyboardRef)}
+                        onKeyboardDidShow={() => retryKeyboardAwareUpdate(contentModalKeyboardRef)}
+                        enableOnAndroid
+                        extraScrollHeight={120}
+                        extraHeight={80}
+                        viewIsInsideTabBar
+                        keyboardOpeningTime={500}
+                        enableResetScrollToCoords={false}
+                    >
                         {contentMaterials.length === 0 ? (
                             <View style={styles.contentEmptyState}>
                                 <Ionicons name="document-text-outline" size={48} color="#cbd5e1" />
@@ -2034,15 +2959,18 @@ export function ReviewScreen() {
                                                                 style={styles.contentThemeInput}
                                                                 value={editContentThemeText}
                                                                 onChangeText={setEditContentThemeText}
+                                                                onFocus={() => retryKeyboardAwareUpdate(contentModalKeyboardRef)}
                                                                 autoFocus
                                                                 multiline
                                                             />
                                                             <View style={styles.contentThemeEditActions}>
-                                                                <Pressable style={styles.contentThemeSaveBtn} onPress={saveContentThemeEdit}>
-                                                                    <Text style={styles.contentThemeSaveText}>保存</Text>
-                                                                </Pressable>
                                                                 <Pressable style={styles.contentThemeCancelBtn} onPress={() => { setEditingContentTheme(null); setEditContentThemeText('') }}>
+                                                                    <Ionicons name="close" size={18} color="#64748b" />
                                                                     <Text style={styles.contentThemeCancelText}>キャンセル</Text>
+                                                                </Pressable>
+                                                                <Pressable style={styles.contentThemeSaveBtn} onPress={saveContentThemeEdit}>
+                                                                    <Ionicons name="checkmark" size={18} color="#ffffff" />
+                                                                    <Text style={styles.contentThemeSaveText}>保存</Text>
                                                                 </Pressable>
                                                             </View>
                                                         </View>
@@ -2055,11 +2983,29 @@ export function ReviewScreen() {
                                                                     setEditContentThemeText(displayTheme)
                                                                 }}
                                                             >
-                                                                <Text style={styles.contentThemeText} numberOfLines={2}>{displayTheme}</Text>
+                                                                {(() => {
+                                                                    const flashcard = parseFlashcard(theme)
+                                                                    if (flashcard.answer) {
+                                                                        return (
+                                                                            <View style={{ flex: 1, paddingVertical: 4 }}>
+                                                                                <Text style={[styles.contentThemeText, { lineHeight: 22 }]} numberOfLines={2}>
+                                                                                    <Text style={{ backgroundColor: '#eff6ff', color: '#2563eb', fontWeight: '800', fontSize: 11 }}> Q </Text>
+                                                                                    <Text style={{ fontWeight: '700', color: '#1e293b' }}> {flashcard.question}   </Text>
+                                                                                    <Text style={{ backgroundColor: '#f0fdf4', color: '#16a34a', fontWeight: '800', fontSize: 11 }}> A </Text>
+                                                                                    <Text style={{ fontWeight: '600', color: '#15803d' }}> {flashcard.answer}</Text>
+                                                                                </Text>
+                                                                            </View>
+                                                                        )
+                                                                    }
+                                                                    return <Text style={styles.contentThemeText} numberOfLines={2}>{displayTheme}</Text>
+                                                                })()}
                                                                 <Ionicons name="pencil" size={14} color="#94a3b8" />
                                                             </Pressable>
-                                                            <Pressable onPress={() => deleteContentTheme(material, lineIndex)} style={styles.contentThemeDelete} hitSlop={8}>
-                                                                <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                                                            <Pressable
+                                                                onPress={() => deleteContentTheme(material, lineIndex)}
+                                                                style={styles.contentThemeIconDelete}
+                                                            >
+                                                                <Ionicons name="trash-outline" size={16} color="#ef4444" />
                                                             </Pressable>
                                                         </View>
                                                     )}
@@ -2070,7 +3016,7 @@ export function ReviewScreen() {
                                 )
                             })
                         )}
-                    </ScrollView>
+                    </KeyboardAwareScrollView>
                 </KeyboardAvoidingView>
             </Modal>
 
@@ -2171,125 +3117,157 @@ export function ReviewScreen() {
                 visible={showCreateModal && !showCropModal}
                 animationType="slide"
                 transparent={false}
-                onRequestClose={() => setShowCreateModal(false)}
+                onRequestClose={() => {
+                    setShowCreateModal(false)
+                    setCreateModalBookLockedId(null)
+                }}
             >
                 <KeyboardAvoidingView
                     style={{ flex: 1 }}
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                    keyboardVerticalOffset={0}
+                    keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
                 >
-                    <ScrollView
+                    <View style={styles.modalHeader}>
+                        <Text style={styles.modalTitle}>復習カード作成</Text>
+                        <Pressable
+                            onPress={() => {
+                                setShowCreateModal(false)
+                                setCreateModalBookLockedId(null)
+                            }}
+                            style={styles.backButton}
+                        >
+                            <Text style={styles.backButtonText}>戻る</Text>
+                        </Pressable>
+                    </View>
+                    <KeyboardAwareScrollView
                         style={{ flex: 1 }}
                         contentContainerStyle={styles.modalContainer}
                         keyboardShouldPersistTaps="handled"
                         keyboardDismissMode="on-drag"
                         showsVerticalScrollIndicator={false}
+                        innerRef={(ref) => { createModalKeyboardRef.current = ref }}
+                        onKeyboardWillShow={() => retryKeyboardAwareUpdate(createModalKeyboardRef)}
+                        onKeyboardDidShow={() => retryKeyboardAwareUpdate(createModalKeyboardRef)}
+                        enableOnAndroid
+                        extraScrollHeight={120}
+                        extraHeight={80}
+                        viewIsInsideTabBar
+                        keyboardOpeningTime={500}
+                        enableResetScrollToCoords={false}
                     >
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>復習カード作成</Text>
-                            <Pressable onPress={() => setShowCreateModal(false)}>
-                                <Ionicons name="close" size={24} color="#64748b" />
-                            </Pressable>
-                        </View>
 
                         <View style={styles.inputGroup}>
                             <Text style={styles.inputLabel}>教材選択</Text>
-                            <View style={styles.headerRow}>
-                                <Text style={styles.mutedText}>
-                                    {selectedBookId
-                                        ? referenceBooks.find((b) => b.id === selectedBookId)?.name
-                                        : '教材が未選択です'}
-                                </Text>
-                                <Pressable style={styles.outlineButton} onPress={() => setShowBookPicker((prev) => !prev)}>
-                                    <Text style={styles.outlineButtonText}>{showBookPicker ? '閉じる' : '教材を選ぶ'}</Text>
-                                </Pressable>
-                            </View>
-                            {showBookPicker && (
-                                <View style={styles.bookPickerArea}>
-                                    <View style={styles.bookHeaderRow}>
-                                        <Text style={styles.bookHeaderText}>教材リスト</Text>
-                                        <Pressable style={styles.addChipButton} onPress={() => setShowAddBookForm((prev) => !prev)}>
-                                            <Ionicons name="add" size={16} color="#334155" />
-                                            <Text style={styles.addChipText}>追加</Text>
+                            {createModalBookLockedId ? (
+                                <View style={styles.headerRow}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                                        <Text style={styles.mutedText}>
+                                            {referenceBooks.find((b) => b.id === createModalBookLockedId)?.name ?? '教材'}
+                                        </Text>
+                                        <Text style={styles.lockedHintText}>（選択中の教材で追加）</Text>
+                                    </View>
+                                </View>
+                            ) : (
+                                <>
+                                    <View style={styles.headerRow}>
+                                        <Text style={styles.mutedText}>
+                                            {selectedBookId
+                                                ? referenceBooks.find((b) => b.id === selectedBookId)?.name
+                                                : '教材が未選択です'}
+                                        </Text>
+                                        <Pressable style={styles.outlineButton} onPress={() => setShowBookPicker((prev) => !prev)}>
+                                            <Text style={styles.outlineButtonText}>{showBookPicker ? '閉じる' : '教材を選ぶ'}</Text>
                                         </Pressable>
                                     </View>
-                                    {showAddBookForm && (
-                                        <View style={styles.addCard}>
-                                            <Text style={styles.addCardTitle}>{editingBookId ? '教材を編集' : '新しい教材を追加'}</Text>
-                                            <Text style={styles.inputLabel}>名前</Text>
-                                            <TextInput
-                                                style={styles.input}
-                                                placeholder="例: チャート式数学I"
-                                                value={newBookName}
-                                                onChangeText={setNewBookName}
-                                            />
-                                            <Text style={styles.inputLabel}>画像（任意）</Text>
-                                            <Pressable style={styles.imageSelectButton} onPress={pickBookImage}>
-                                                {newBookImage ? (
-                                                    <Image source={{ uri: newBookImage }} style={{ width: 100, height: 100, borderRadius: 8 }} />
-                                                ) : (
-                                                    <Text style={styles.imageSelectText}>画像を選択</Text>
-                                                )}
-                                            </Pressable>
-                                            <View style={styles.modalActions}>
-                                                <Pressable
-                                                    style={styles.cancelButton}
-                                                    onPress={() => {
-                                                        setShowAddBookForm(false)
-                                                        setNewBookName('')
-                                                        setNewBookImage(null)
-                                                        setEditingBookId(null)
-                                                    }}
-                                                >
-                                                    <Text style={styles.cancelButtonText}>キャンセル</Text>
+                                    {showBookPicker && (
+                                        <View style={styles.bookPickerArea}>
+                                            <View style={styles.bookHeaderRow}>
+                                                <Text style={styles.bookHeaderText}>教材リスト</Text>
+                                                <Pressable style={styles.addChipButton} onPress={() => setShowAddBookForm((prev) => !prev)}>
+                                                    <Ionicons name="add" size={16} color="#334155" />
+                                                    <Text style={styles.addChipText}>追加</Text>
                                                 </Pressable>
-                                                <Pressable style={styles.submitButton} onPress={handleAddBook}>
-                                                    <Text style={styles.submitButtonText}>{editingBookId ? '保存' : '追加'}</Text>
-                                                </Pressable>
+                                            </View>
+                                            {showAddBookForm && (
+                                                <View style={styles.addCard}>
+                                                    <Text style={styles.addCardTitle}>{editingBookId ? '教材を編集' : '新しい教材を追加'}</Text>
+                                                    <Text style={styles.inputLabel}>名前</Text>
+                                                    <TextInput
+                                                        style={styles.input}
+                                                        placeholder="例: チャート式数学I"
+                                                        value={newBookName}
+                                                        onChangeText={setNewBookName}
+                                                        onFocus={() => retryKeyboardAwareUpdate(createModalKeyboardRef)}
+                                                    />
+                                                    <Text style={styles.inputLabel}>画像（任意）</Text>
+                                                    <Pressable style={styles.imageSelectButton} onPress={pickBookImage}>
+                                                        {newBookImage ? (
+                                                            <Image source={{ uri: newBookImage }} style={{ width: 100, height: 100, borderRadius: 8 }} />
+                                                        ) : (
+                                                            <Text style={styles.imageSelectText}>画像を選択</Text>
+                                                        )}
+                                                    </Pressable>
+                                                    <View style={styles.modalActions}>
+                                                        <Pressable
+                                                            style={styles.cancelButton}
+                                                            onPress={() => {
+                                                                setShowAddBookForm(false)
+                                                                setNewBookName('')
+                                                                setNewBookImage(null)
+                                                                setEditingBookId(null)
+                                                            }}
+                                                        >
+                                                            <Text style={styles.cancelButtonText}>キャンセル</Text>
+                                                        </Pressable>
+                                                        <Pressable style={styles.submitButton} onPress={handleAddBook}>
+                                                            <Text style={styles.submitButtonText}>{editingBookId ? '保存' : '追加'}</Text>
+                                                        </Pressable>
+                                                    </View>
+                                                </View>
+                                            )}
+                                            <View style={styles.bookGrid}>
+                                                {referenceBooks.map((book) => (
+                                                    <View
+                                                        key={book.id}
+                                                        style={[
+                                                            styles.bookCard,
+                                                            selectedBookId === book.id && styles.bookCardActive,
+                                                        ]}
+                                                    >
+                                                        <View style={styles.cardActionRow}>
+                                                            <Pressable style={styles.iconButton} onPress={() => {
+                                                                setEditingBookId(book.id)
+                                                                setNewBookName(book.name)
+                                                                setNewBookImage(book.image_url)
+                                                                setShowAddBookForm(true)
+                                                            }}>
+                                                                <Ionicons name="create-outline" size={16} color="#64748b" />
+                                                            </Pressable>
+                                                            <Pressable style={styles.iconButton} onPress={() => handleDeleteBook(book.id)}>
+                                                                <Ionicons name="trash-outline" size={16} color="#64748b" />
+                                                            </Pressable>
+                                                        </View>
+                                                        <Pressable
+                                                            style={styles.bookSelectArea}
+                                                            onPress={() => {
+                                                                setSelectedBookId(book.id)
+                                                            }}
+                                                        >
+                                                            <View style={styles.bookImageBox}>
+                                                                {book.image_url ? (
+                                                                    <Image source={{ uri: book.image_url }} style={styles.bookImage} />
+                                                                ) : (
+                                                                    <Ionicons name="book-outline" size={32} color="#94a3b8" />
+                                                                )}
+                                                            </View>
+                                                            <Text style={styles.bookCardText} numberOfLines={2}>{book.name}</Text>
+                                                        </Pressable>
+                                                    </View>
+                                                ))}
                                             </View>
                                         </View>
                                     )}
-                                    <View style={styles.bookGrid}>
-                                        {referenceBooks.map((book) => (
-                                            <View
-                                                key={book.id}
-                                                style={[
-                                                    styles.bookCard,
-                                                    selectedBookId === book.id && styles.bookCardActive,
-                                                ]}
-                                            >
-                                                <View style={styles.cardActionRow}>
-                                                    <Pressable style={styles.iconButton} onPress={() => {
-                                                        setEditingBookId(book.id)
-                                                        setNewBookName(book.name)
-                                                        setNewBookImage(book.image_url)
-                                                        setShowAddBookForm(true)
-                                                    }}>
-                                                        <Ionicons name="create-outline" size={16} color="#64748b" />
-                                                    </Pressable>
-                                                    <Pressable style={styles.iconButton} onPress={() => handleDeleteBook(book.id)}>
-                                                        <Ionicons name="trash-outline" size={16} color="#64748b" />
-                                                    </Pressable>
-                                                </View>
-                                                <Pressable
-                                                    style={styles.bookSelectArea}
-                                                    onPress={() => {
-                                                        setSelectedBookId(book.id)
-                                                    }}
-                                                >
-                                                    <View style={styles.bookImageBox}>
-                                                        {book.image_url ? (
-                                                            <Image source={{ uri: book.image_url }} style={styles.bookImage} />
-                                                        ) : (
-                                                            <Ionicons name="book-outline" size={32} color="#94a3b8" />
-                                                        )}
-                                                    </View>
-                                                    <Text style={styles.bookCardText} numberOfLines={2}>{book.name}</Text>
-                                                </Pressable>
-                                            </View>
-                                        ))}
-                                    </View>
-                                </View>
+                                </>
                             )}
                         </View>
 
@@ -2305,17 +3283,45 @@ export function ReviewScreen() {
                                 </Text>
                             </Pressable>
                             {showDatePicker && (
-                                <DateTimePicker
-                                    value={selectedDate}
-                                    mode="date"
-                                    display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                                    onChange={(event, date) => {
-                                        if (Platform.OS === 'android') {
+                                Platform.OS === 'ios' ? (
+                                    <Modal
+                                        transparent={true}
+                                        animationType="fade"
+                                        visible={showDatePicker}
+                                        onRequestClose={() => setShowDatePicker(false)}
+                                    >
+                                        <View style={styles.datePickerOverlay}>
+                                            <View style={styles.datePickerContainer}>
+                                                <View style={styles.datePickerHeader}>
+                                                    <Pressable onPress={() => setShowDatePicker(false)} style={styles.datePickerCloseButton}>
+                                                        <Text style={styles.datePickerCloseText}>完了</Text>
+                                                    </Pressable>
+                                                </View>
+                                                <DateTimePicker
+                                                    value={selectedDate}
+                                                    mode="date"
+                                                    display="spinner"
+                                                    locale="ja-JP"
+                                                    onChange={(event, date) => {
+                                                        if (date) setSelectedDate(date)
+                                                    }}
+                                                />
+                                            </View>
+                                        </View>
+                                    </Modal>
+                                ) : (
+                                    <DateTimePicker
+                                        value={selectedDate}
+                                        mode="date"
+                                        display="default"
+                                        onChange={(event, date) => {
                                             setShowDatePicker(false)
-                                        }
-                                        if (date) setSelectedDate(date)
-                                    }}
-                                />
+                                            if (event.type === 'set' && date) {
+                                                setSelectedDate(date)
+                                            }
+                                        }}
+                                    />
+                                )
                             )}
                         </View>
 
@@ -2340,10 +3346,7 @@ export function ReviewScreen() {
 
                         {createMode === 'ai' ? (
                             <View style={styles.inputSection}>
-                                <Text style={styles.sectionTitle}>学習メモ（AIが問題を自動生成）</Text>
-                                <View style={styles.aiOnlyHeaderRow}>
-                                    <Text style={styles.aiOnlyChip}>AIモード専用</Text>
-                                </View>
+                                <Text style={styles.sectionTitle}>AIが問題を自動生成</Text>
                                 <Pressable
                                     style={[styles.outlineButton, styles.photoThemeButton]}
                                     onPress={() => {
@@ -2375,6 +3378,7 @@ export function ReviewScreen() {
                                                 next[index] = text
                                                 setAiNotes(next)
                                             }}
+                                            onFocus={() => retryKeyboardAwareUpdate(createModalKeyboardRef)}
                                             multiline
                                         />
                                         <Pressable
@@ -2420,6 +3424,7 @@ export function ReviewScreen() {
                                                 next[index] = { ...next[index], question: text }
                                                 setFlashcards(next)
                                             }}
+                                            onFocus={() => retryKeyboardAwareUpdate(createModalKeyboardRef)}
                                             multiline
                                         />
                                         <Text style={styles.flashcardLabel}>答え（裏面）</Text>
@@ -2432,6 +3437,7 @@ export function ReviewScreen() {
                                                 next[index] = { ...next[index], answer: text }
                                                 setFlashcards(next)
                                             }}
+                                            onFocus={() => retryKeyboardAwareUpdate(createModalKeyboardRef)}
                                             multiline
                                         />
                                     </View>
@@ -2444,14 +3450,11 @@ export function ReviewScreen() {
                         )}
 
                         <View style={styles.modalActions}>
-                            <Pressable style={styles.cancelButton} onPress={() => setShowCreateModal(false)}>
-                                <Text style={styles.cancelButtonText}>キャンセル</Text>
-                            </Pressable>
                             <Pressable style={styles.submitButton} onPress={handleCreate}>
                                 <Text style={styles.submitButtonText}>作成</Text>
                             </Pressable>
                         </View>
-                    </ScrollView>
+                    </KeyboardAwareScrollView>
                 </KeyboardAvoidingView>
             </Modal>
         </ScrollView>
@@ -2471,31 +3474,50 @@ const styles = StyleSheet.create({
     },
     card: {
         borderWidth: 1,
-        borderColor: '#e2e8f0',
-        borderRadius: 16,
-        padding: 16,
+        borderColor: '#f1f5f9',
+        borderRadius: 24,
+        padding: 20,
         backgroundColor: '#ffffff',
-        gap: 10,
+        gap: 12,
+        shadowColor: '#64748b',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.06,
+        shadowRadius: 16,
+        elevation: 4,
     },
     cardTitle: {
-        fontSize: 18,
-        fontWeight: '700',
+        fontSize: 20,
+        fontWeight: '800',
+        color: '#0f172a',
+        letterSpacing: 0.3,
     },
     cardSubtitle: {
-        fontSize: 12,
-        color: '#94a3b8',
+        fontSize: 13,
+        color: '#475569',
+        marginTop: 4,
     },
     mutedText: {
         fontSize: 12,
         color: '#64748b',
     },
+    lockedHintText: {
+        fontSize: 11,
+        color: '#94a3b8',
+        marginLeft: 4,
+    },
     outlineButton: {
         borderWidth: 1,
-        borderColor: '#cbd5f5',
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 10,
+        borderColor: '#bfdbfe',
+        backgroundColor: '#eff6ff',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 12,
         alignItems: 'center',
+        shadowColor: '#3b82f6',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        elevation: 1,
     },
     outlineButtonText: {
         color: '#2563eb',
@@ -2542,10 +3564,33 @@ const styles = StyleSheet.create({
     },
     themeCard: {
         borderWidth: 1,
-        borderColor: '#e2e8f0',
-        borderRadius: 12,
-        padding: 12,
+        borderColor: '#f1f5f9',
+        borderRadius: 16,
+        padding: 16,
         gap: 8,
+        backgroundColor: '#ffffff',
+        shadowColor: '#64748b',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
+        elevation: 3,
+    },
+    themeBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'flex-start',
+        backgroundColor: '#f1f5f9',
+        paddingHorizontal: 8,
+        paddingVertical: 6,
+        borderRadius: 8,
+        gap: 4,
+        marginTop: 2,
+        marginBottom: 4,
+    },
+    themeBadgeText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#475569',
     },
     themeHeader: {
         flexDirection: 'row',
@@ -2553,8 +3598,9 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     themeTitle: {
-        fontSize: 13,
-        fontWeight: '600',
+        fontSize: 15,
+        fontWeight: '800',
+        color: '#0f172a',
     },
     difficultyRow: {
         flexDirection: 'row',
@@ -2566,11 +3612,12 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#64748b',
         marginRight: 4,
+        fontWeight: '600',
     },
     difficultyButton: {
         borderWidth: 1,
         borderColor: '#e2e8f0',
-        borderRadius: 10,
+        borderRadius: 12,
         paddingHorizontal: 10,
         paddingVertical: 6,
         backgroundColor: '#f8fafc',
@@ -2578,6 +3625,11 @@ const styles = StyleSheet.create({
     difficultyButtonActive: {
         borderColor: '#2563eb',
         backgroundColor: '#2563eb',
+        shadowColor: '#2563eb',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        elevation: 2,
     },
     difficultyText: {
         fontSize: 11,
@@ -2693,18 +3745,24 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 6,
         backgroundColor: '#2563eb',
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 8,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 999,
+        shadowColor: '#2563eb',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 4,
     },
     createButtonText: {
         color: '#ffffff',
-        fontSize: 13,
-        fontWeight: '600',
+        fontSize: 14,
+        fontWeight: '700',
+        letterSpacing: 0.3,
     },
     modalContainer: {
         padding: 20,
-        paddingTop: Platform.OS === 'ios' ? 60 : 20,
+        paddingTop: 0,
         paddingBottom: 300, // Increased for keyboard spacing
         backgroundColor: '#f8fafc',
         flexGrow: 1,
@@ -2713,12 +3771,43 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 20,
+        paddingTop: Platform.OS === 'ios' ? 60 : 20,
+        paddingHorizontal: 20,
+        paddingBottom: 16,
+        backgroundColor: '#f8fafc',
     },
     modalTitle: {
         fontSize: 20,
         fontWeight: '700',
         color: '#0f172a',
+    },
+    datePickerOverlay: {
+        flex: 1,
+        justifyContent: 'flex-end',
+        backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    },
+    datePickerContainer: {
+        backgroundColor: '#ffffff',
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        paddingBottom: Platform.OS === 'ios' ? 20 : 0,
+    },
+    datePickerHeader: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#f1f5f9',
+    },
+    datePickerCloseButton: {
+        paddingVertical: 4,
+        paddingHorizontal: 8,
+    },
+    datePickerCloseText: {
+        color: '#2563eb',
+        fontWeight: '700',
+        fontSize: 16,
     },
     inputGroup: {
         marginBottom: 16,
@@ -3081,14 +4170,14 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         backgroundColor: '#ffffff',
         padding: 16,
-        borderRadius: 16,
+        borderRadius: 20,
         borderWidth: 1,
-        borderColor: '#e2e8f0',
+        borderColor: '#f1f5f9',
         shadowColor: '#64748b',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        elevation: 2,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
+        elevation: 3,
     },
     subjectCardLeft: {
         flexDirection: 'row',
@@ -3096,10 +4185,12 @@ const styles = StyleSheet.create({
         gap: 16,
     },
     subjectIconBox: {
-        width: 48,
-        height: 48,
-        borderRadius: 12,
-        backgroundColor: '#f1f5f9',
+        width: 52,
+        height: 52,
+        borderRadius: 16,
+        backgroundColor: '#f8fafc',
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
@@ -3119,21 +4210,27 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
     },
     cnadge: {
-        backgroundColor: '#eff6ff',
-        paddingHorizontal: 8,
-        paddingVertical: 2,
-        borderRadius: 6,
+        backgroundColor: '#dbeafe',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: '#bfdbfe',
     },
     cnadgeText: {
         fontSize: 12,
-        color: '#2563eb',
-        fontWeight: '600',
+        color: '#1d4ed8',
+        fontWeight: '700',
     },
     backButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
         paddingVertical: 8,
         paddingHorizontal: 12,
         backgroundColor: '#f1f5f9',
-        borderRadius: 8,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
     },
     backButtonText: {
         color: '#64748b',
@@ -3401,39 +4498,40 @@ const styles = StyleSheet.create({
     headerButtons: {
         flexDirection: 'row',
         alignItems: 'center',
+        flexWrap: 'wrap',
         gap: 8,
     },
     contentButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 10,
+        gap: 6,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        borderRadius: 999,
+        backgroundColor: '#f1f5f9',
         borderWidth: 1,
         borderColor: '#e2e8f0',
-        backgroundColor: '#f8fafc',
     },
     contentButtonText: {
-        color: '#64748b',
+        color: '#475569',
         fontSize: 13,
-        fontWeight: '600',
+        fontWeight: '700',
     },
     futureButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: '#3b82f6',
+        gap: 6,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        borderRadius: 999,
         backgroundColor: '#eff6ff',
+        borderWidth: 1,
+        borderColor: '#bfdbfe',
     },
     futureButtonText: {
-        color: '#3b82f6',
+        color: '#2563eb',
         fontSize: 13,
-        fontWeight: '600',
+        fontWeight: '700',
     },
     contentModalRoot: {
         flex: 1,
@@ -3510,28 +4608,44 @@ const styles = StyleSheet.create({
         borderTopColor: '#f1f5f9',
         paddingTop: 8,
     },
+    contentThemeEditRow: {
+        width: '100%',
+    },
     contentThemeTextWrap: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 8,
+        flexWrap: 'nowrap',
+        flex: 1,
+        gap: 6,
     },
     contentThemeTextPressable: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-    },
-    contentThemeDelete: {
-        padding: 4,
+        gap: 8,
     },
     contentThemeText: {
-        fontSize: 14,
-        color: '#475569',
         flex: 1,
+        fontSize: 14,
+        color: '#1e293b',
+        lineHeight: 20,
     },
-    contentThemeEditRow: {
-        gap: 8,
+    contentThemeIconEdit: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#f1f5f9',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginLeft: 'auto',
+    },
+    contentThemeIconDelete: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#fef2f2',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     contentThemeInput: {
         borderWidth: 1,
@@ -3545,26 +4659,42 @@ const styles = StyleSheet.create({
     },
     contentThemeEditActions: {
         flexDirection: 'row',
-        gap: 8,
+        justifyContent: 'flex-end',
+        marginTop: 8,
     },
     contentThemeSaveBtn: {
-        backgroundColor: '#2563eb',
-        paddingVertical: 8,
-        paddingHorizontal: 16,
-        borderRadius: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#3b82f6',
+        paddingVertical: 10,
+        paddingHorizontal: 18,
+        borderRadius: 12,
+        marginLeft: 12,
+        shadowColor: '#3b82f6',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4,
     },
     contentThemeSaveText: {
         color: '#ffffff',
-        fontWeight: '600',
+        fontWeight: '700',
         fontSize: 14,
+        marginLeft: 6,
     },
     contentThemeCancelBtn: {
-        paddingVertical: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#f1f5f9',
+        paddingVertical: 10,
         paddingHorizontal: 16,
+        borderRadius: 12,
     },
     contentThemeCancelText: {
         color: '#64748b',
+        fontWeight: '600',
         fontSize: 14,
+        marginLeft: 6,
     },
     futureModalRoot: {
         flex: 1,
@@ -3629,6 +4759,440 @@ const styles = StyleSheet.create({
     futureEmptySubtext: {
         fontSize: 14,
         color: '#94a3b8',
+    },
+    historyPremiumRoot: {
+        flex: 1,
+        backgroundColor: '#f8fafc',
+    },
+    historyPremiumHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingTop: Platform.OS === 'ios' ? 60 : 24,
+        paddingHorizontal: 20,
+        paddingBottom: 16,
+    },
+    historyPremiumTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    historyPremiumTitleIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        backgroundColor: '#ecfdf5',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    historyPremiumTitle: {
+        fontSize: 22,
+        fontWeight: '800',
+        color: '#0f172a',
+        letterSpacing: 0.3,
+    },
+    historyPremiumHeaderActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    historyPremiumRefreshBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#f8fafc',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    historyPremiumCloseBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#f8fafc',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    historyTabsContainer: {
+        flexDirection: 'row',
+        paddingHorizontal: 16,
+        paddingBottom: 12,
+        gap: 8,
+    },
+    historyTab: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        paddingVertical: 10,
+        backgroundColor: '#f1f5f9',
+        borderRadius: 12,
+    },
+    historyTabActive: {
+        backgroundColor: '#eff6ff',
+        borderWidth: 1,
+        borderColor: '#bfdbfe',
+    },
+    historyTabText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#64748b',
+    },
+    historyTabTextActive: {
+        color: '#2563eb',
+        fontWeight: '700',
+    },
+    historyPremiumBody: {
+        flex: 1,
+    },
+    historyPremiumBodyContent: {
+        paddingHorizontal: 16,
+        paddingTop: 16,
+        paddingBottom: 40,
+    },
+    historyPremiumErrorBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#fef2f2',
+        borderWidth: 1,
+        borderColor: '#fecaca',
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        marginBottom: 12,
+    },
+    historyPremiumErrorText: {
+        flex: 1,
+        color: '#b91c1c',
+        fontSize: 13,
+        fontWeight: '600',
+        lineHeight: 18,
+    },
+    historyPremiumEmptyState: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingTop: 80,
+    },
+    historyPremiumEmptyIconWrap: {
+        width: 80,
+        height: 80,
+        borderRadius: 40,
+        backgroundColor: '#f1f5f9',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 16,
+    },
+    historyPremiumEmptyText: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#475569',
+        marginBottom: 8,
+    },
+    historyPremiumEmptySubtext: {
+        fontSize: 14,
+        color: '#94a3b8',
+    },
+    historyPremiumCard: {
+        backgroundColor: '#ffffff',
+        borderRadius: 16,
+        padding: 16,
+        marginBottom: 16,
+        shadowColor: '#64748b',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
+        elevation: 3,
+        borderWidth: 1,
+        borderColor: '#f1f5f9',
+    },
+    historyPremiumCardHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    historyPremiumDate: {
+        fontSize: 13,
+        color: '#64748b',
+        fontWeight: '700',
+    },
+    historyPremiumSubjectBadge: {
+        backgroundColor: '#f1f5f9',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 8,
+    },
+    historyPremiumSubjectText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#475569',
+    },
+    historyPremiumTheme: {
+        fontSize: 17,
+        fontWeight: '800',
+        color: '#0f172a',
+        lineHeight: 24,
+    },
+    historyTrendMetaRow: {
+        marginTop: 8,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 8,
+    },
+    historyTrendMetaText: {
+        fontSize: 12,
+        color: '#64748b',
+        fontWeight: '600',
+    },
+    historyPremiumDivider: {
+        height: 1,
+        backgroundColor: '#f1f5f9',
+        marginVertical: 12,
+    },
+    historyRetentionSection: {
+        marginBottom: 14,
+        backgroundColor: '#f8fafc',
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        borderRadius: 12,
+        padding: 12,
+    },
+    historyRetentionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    historyRetentionTitle: {
+        fontSize: 13,
+        color: '#475569',
+        fontWeight: '700',
+    },
+    historyRetentionPercent: {
+        fontSize: 15,
+        fontWeight: '800',
+    },
+    historyRetentionTrack: {
+        height: 9,
+        borderRadius: 999,
+        backgroundColor: '#e2e8f0',
+        overflow: 'hidden',
+    },
+    historyRetentionFill: {
+        height: '100%',
+        borderRadius: 999,
+    },
+    historyRetentionCaption: {
+        marginTop: 8,
+        fontSize: 12,
+        color: '#64748b',
+        fontWeight: '600',
+    },
+    historyTrendScrollContent: {
+        alignItems: 'center',
+        paddingBottom: 4,
+        paddingRight: 8,
+    },
+    historyTrendStep: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginRight: 2,
+    },
+    historyTrendChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderRadius: 999,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        gap: 6,
+    },
+    historyTrendChipText: {
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    historyTrendChipDate: {
+        fontSize: 11,
+        color: '#64748b',
+        fontWeight: '600',
+    },
+    historyTrendArrow: {
+        marginHorizontal: 4,
+    },
+    historyPremiumQuestion: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#334155',
+        lineHeight: 22,
+        marginBottom: 14,
+    },
+    historyMoreButton: {
+        marginTop: 10,
+        alignSelf: 'flex-start',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 999,
+        backgroundColor: '#e0f2fe',
+    },
+    historyMoreButtonText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#0369a1',
+    },
+    historyAttemptsList: {
+        marginTop: 12,
+        gap: 10,
+    },
+    historyAttemptItem: {
+        paddingVertical: 6,
+        borderTopWidth: 1,
+        borderTopColor: '#e2e8f0',
+        gap: 4,
+    },
+    historyAttemptTitle: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#475569',
+    },
+    historyAttemptQuestion: {
+        fontSize: 14,
+        color: '#0f172a',
+        lineHeight: 20,
+    },
+    historyAttemptChoices: {
+        marginTop: 4,
+        gap: 6,
+    },
+    historyAttemptExplanation: {
+        marginTop: 4,
+        fontSize: 13,
+        color: '#4b5563',
+        lineHeight: 19,
+    },
+    historyPremiumChoices: {
+        gap: 8,
+        marginBottom: 16,
+    },
+    historyPremiumChoice: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#f8fafc',
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+    },
+    historyPremiumChoiceCorrect: {
+        backgroundColor: '#f0fdf4',
+        borderColor: '#16a34a',
+    },
+    historyPremiumChoiceWrong: {
+        backgroundColor: '#fef2f2',
+        borderColor: '#ef4444',
+    },
+    historyPremiumChoiceText: {
+        flex: 1,
+        fontSize: 14,
+        color: '#475569',
+        lineHeight: 20,
+    },
+    historyPremiumResultBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 10,
+        borderRadius: 10,
+        gap: 6,
+    },
+    resultBannerCorrect: {
+        backgroundColor: '#f0fdf4',
+    },
+    resultBannerWrong: {
+        backgroundColor: '#fef2f2',
+    },
+    historyPremiumResultText: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        marginLeft: 6,
+    },
+    historyPremiumExplanationBox: {
+        marginTop: 12,
+        backgroundColor: '#f1f5f9',
+        borderRadius: 8,
+        padding: 12,
+    },
+    historyPremiumExplanationLabel: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        color: '#64748b',
+        marginBottom: 4,
+    },
+    historyPremiumExplanationText: {
+        fontSize: 14,
+        color: '#334155',
+        lineHeight: 20,
+    },
+    // Flashcard styles
+    historyPremiumFlashcardQA: {
+        backgroundColor: '#ffffff',
+        borderRadius: 12,
+        padding: 14,
+        marginBottom: 14,
+        borderWidth: 1,
+        borderColor: '#f1f5f9',
+    },
+    historyPremiumFlashcardRow: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    historyPremiumQABadge: {
+        width: 24,
+        height: 24,
+        borderRadius: 6,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: 2,
+    },
+    historyPremiumQABadgeText: {
+        fontSize: 13,
+        fontWeight: '800',
+    },
+    historyPremiumFlashcardQText: {
+        flex: 1,
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#1e293b',
+        lineHeight: 22,
+    },
+    historyPremiumFlashcardAText: {
+        flex: 1,
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#475569',
+        lineHeight: 22,
+    },
+    historyPremiumRatingFooter: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 10,
+    },
+    historyPremiumRatingLabel: {
+        fontSize: 13,
+        color: '#64748b',
+        fontWeight: '600',
+    },
+    historyPremiumRatingBadge: {
+        paddingHorizontal: 12,
+        paddingVertical: 4,
+        borderRadius: 8,
+    },
+    historyPremiumRatingText: {
+        fontSize: 12,
+        fontWeight: '800',
     },
     futureDateGroup: {
         marginBottom: 16,

@@ -8,9 +8,9 @@
     "icon": "../public/images/mascot.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "../public/images/mascot.png",
+      "image": "../public/images/premium_splash_v2.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#020617"
     },
     "ios": {
       "supportsTablet": true,
@@ -21,14 +21,18 @@
       }
     },
     "android": {
+      "softwareKeyboardLayoutMode": "pan",
       "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
         "CAMERA",
         "READ_MEDIA_IMAGES"
       ],
       "adaptiveIcon": {
         "foregroundImage": "../public/images/mascot.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.nextedovation.manabi_ai"
     },
     "web": {
       "favicon": "../public/images/mascot.png"

@@ -81,7 +81,9 @@ export default function StudyPage() {
             .order('created_at', { ascending: false }),
           supabase
             .from('review_tasks')
-            .select('id, due_at, status, study_log_id, study_logs(note, subject, started_at)')
+            .select(
+              'id, due_at, status, study_log_id, review_material_id, study_logs(note, subject, started_at), review_materials(content, subject, study_date, created_at)'
+            )
             .eq('user_id', user.id)
             .eq('status', 'pending')
             .lte('due_at', new Date().toISOString())
@@ -92,10 +94,21 @@ export default function StudyPage() {
         if (tasksError) throw tasksError
         setReferenceBooks(data || [])
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const normalizedTasks = ((tasksData as any[]) || []).map((task) => ({
-          ...task,
-          study_logs: Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null,
-        })) as ReviewTask[]
+        const normalizedTasks = ((tasksData as any[]) || []).map((task) => {
+          const sl = Array.isArray(task.study_logs) ? task.study_logs[0] ?? null : task.study_logs ?? null
+          const rm = Array.isArray(task.review_materials) ? task.review_materials[0] ?? null : task.review_materials ?? null
+          const effectiveLog = rm
+            ? {
+                note: rm.content,
+                subject: rm.subject ?? null,
+                started_at: rm.study_date ?? rm.created_at ?? null,
+              }
+            : sl
+          return {
+            ...task,
+            study_logs: effectiveLog,
+          }
+        }) as ReviewTask[]
         setReviewTasks(normalizedTasks)
       } catch (error: unknown) {
         console.error('Failed to load reference books:', error)

@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
-  KeyboardAvoidingView,
   Linking,
   Modal,
   FlatList,
   Platform,
   Pressable,
-  ScrollView,
   Share,
   StyleSheet,
   Text,
@@ -16,7 +14,9 @@ import {
   TouchableOpacity,
   Image,
   Platform as RNPlatform,
+  KeyboardAvoidingView,
 } from 'react-native'
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import Svg, { Circle, G } from 'react-native-svg'
 // @ts-ignore - @expo/vector-icons types may not be available
@@ -69,6 +69,19 @@ export function LogScreen() {
   const [weekOverride, setWeekOverride] = useState('')
   const [monthOverride, setMonthOverride] = useState('')
 
+  // Helper: Count actual weekdays and weekend days in the given month (UTC)
+  const countMonthWeekdays = (year: number, month: number): { weekdays: number; weekends: number } => {
+    const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+    let weekdays = 0
+    let weekends = 0
+    for (let d = 1; d <= daysInMonth; d++) {
+      const day = new Date(Date.UTC(year, month, d)).getUTCDay()
+      if (day === 0 || day === 6) weekends++
+      else weekdays++
+    }
+    return { weekdays, weekends }
+  }
+
   // Helper function to get the current display name for a study log
   const getLogDisplayName = (log: StudyLog): string => {
     if (log.reference_book_id) {
@@ -116,6 +129,15 @@ export function LogScreen() {
     totalMinutes: number
   } | null>(null)
   const [showAllMemoLogs, setShowAllMemoLogs] = useState(false)
+  const keyboardRef = useRef<any>(null)
+
+  const retryKeyboardAwareUpdate = useCallback(() => {
+    ;[0, 120, 280, 520].forEach((delay) => {
+      setTimeout(() => {
+        keyboardRef.current?.update?.()
+      }, delay)
+    })
+  }, [])
 
   // 復習カードの修正
 
@@ -596,10 +618,10 @@ export function LogScreen() {
       return dayOffset === 0 ? '今日' : `${dayOffset}日前`
     }
     if (materialRangeType === 'week') {
-      return weekOffset === 1 ? '先週' : `${weekOffset}週間前`
+      return weekOffset === 0 ? '今週' : weekOffset === 1 ? '先週' : `${weekOffset}週間前`
     }
     if (materialRangeType === 'month') {
-      return monthOffset === 1 ? '先月' : `${monthOffset}ヶ月前`
+      return monthOffset === 0 ? '今月' : monthOffset === 1 ? '先月' : `${monthOffset}ヶ月前`
     }
     return '総計'
   }, [materialRangeType, dayOffset, weekOffset, monthOffset])
@@ -618,8 +640,8 @@ export function LogScreen() {
 
   const cycleOffset = () => {
     if (materialRangeType === 'day') setDayOffset((prev) => (prev + 1) % 4)
-    if (materialRangeType === 'week') setWeekOffset((prev) => (prev % 6) + 1)
-    if (materialRangeType === 'month') setMonthOffset((prev) => (prev % 13) + 1)
+    if (materialRangeType === 'week') setWeekOffset((prev) => (prev + 1) % 6)
+    if (materialRangeType === 'month') setMonthOffset((prev) => (prev + 1) % 12)
   }
 
   const subjectColorMap = useMemo(() => {
@@ -662,25 +684,25 @@ export function LogScreen() {
     }
     if (materialRangeType === 'week') {
       return Array.from({ length: 6 }, (_, index) => ({
-        label: index === 0 ? '先週' : `${index + 1}週間前`,
-        value: index + 1,
+        label: index === 0 ? '今週' : index === 1 ? '先週' : `${index}週間前`,
+        value: index,
       }))
     }
     if (materialRangeType === 'month') {
-      return Array.from({ length: 13 }, (_, index) => ({
-        label: index === 0 ? '先月' : `${index + 1}ヶ月前`,
-        value: index + 1,
+      return Array.from({ length: 12 }, (_, index) => ({
+        label: index === 0 ? '今月' : index === 1 ? '先月' : `${index}ヶ月前`,
+        value: index,
       }))
     }
     return []
   }, [materialRangeType])
   const weekOptions = Array.from({ length: 6 }, (_, index) => ({
-    label: index === 0 ? '先週' : `${index + 1}週間前`,
-    value: index + 1,
+    label: index === 0 ? '今週' : index === 1 ? '先週' : `${index}週間前`,
+    value: index,
   }))
-  const monthOptions = Array.from({ length: 13 }, (_, index) => ({
-    label: index === 0 ? '先月' : `${index + 1}ヶ月前`,
-    value: index + 1,
+  const monthOptions = Array.from({ length: 12 }, (_, index) => ({
+    label: index === 0 ? '今月' : index === 1 ? '先月' : `${index}ヶ月前`,
+    value: index,
   }))
 
   const totalMinutesForDonut = logsRangeTotals.reduce((sum, [, minutes]) => sum + minutes, 0)
@@ -695,9 +717,22 @@ export function LogScreen() {
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={80}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView
+        style={styles.screen}
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        innerRef={(ref) => { keyboardRef.current = ref }}
+        onKeyboardWillShow={retryKeyboardAwareUpdate}
+        onKeyboardDidShow={retryKeyboardAwareUpdate}
+        enableOnAndroid
+        extraScrollHeight={100}
+        extraHeight={80}
+        viewIsInsideTabBar
+        keyboardOpeningTime={500}
+        enableResetScrollToCoords={false}
+      >
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>学習時間</Text>
           {loading ? (
@@ -720,10 +755,9 @@ export function LogScreen() {
           <View style={styles.smallCardRow}>
             <View style={styles.smallCard}>
               <View style={styles.smallCardHeader}>
-                <Text style={styles.smallCardLabel}>先週</Text>
                 <View style={[styles.selectWrap, styles.selectWrapShrink]}>
                   <Pressable style={styles.smallSelectButton} onPress={() => setShowWeekMenu((prev) => !prev)}>
-                    <Text style={styles.smallSelectText} numberOfLines={1}>{weekOffset === 1 ? '先週' : `${weekOffset - 1}週間前`}</Text>
+                    <Text style={styles.smallSelectText} numberOfLines={1}>{weekOffset === 0 ? '今週' : weekOffset === 1 ? '先週' : `${weekOffset}週間前`}</Text>
                     <Ionicons name="chevron-down" size={14} color="#334155" />
                   </Pressable>
                   {showWeekMenu && (
@@ -750,10 +784,9 @@ export function LogScreen() {
             </View>
             <View style={styles.smallCard}>
               <View style={styles.smallCardHeader}>
-                <Text style={styles.smallCardLabel}>先月</Text>
                 <View style={[styles.selectWrap, styles.selectWrapShrink]}>
                   <Pressable style={styles.smallSelectButton} onPress={() => setShowMonthMenu((prev) => !prev)}>
-                    <Text style={styles.smallSelectText} numberOfLines={1}>{monthOffset === 1 ? '先月' : `${monthOffset - 1}ヶ月前`}</Text>
+                    <Text style={styles.smallSelectText} numberOfLines={1}>{monthOffset === 0 ? '今月' : monthOffset === 1 ? '先月' : `${monthOffset}ヶ月前`}</Text>
                     <Ionicons name="chevron-down" size={14} color="#334155" />
                   </Pressable>
                   {showMonthMenu && (
@@ -1072,6 +1105,7 @@ export function LogScreen() {
                   keyboardType="numeric"
                   value={manualMinutes}
                   onChangeText={setManualMinutes}
+                  onFocus={retryKeyboardAwareUpdate}
                   placeholder="60"
                 />
               </View>
@@ -1173,6 +1207,7 @@ export function LogScreen() {
                   keyboardType="numeric"
                   value={todayOverride}
                   onChangeText={setTodayOverride}
+                  onFocus={retryKeyboardAwareUpdate}
                 />
               </View>
               <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('today')} disabled={isSavingToday}>
@@ -1216,6 +1251,7 @@ export function LogScreen() {
                   keyboardType="numeric"
                   value={weekOverride}
                   onChangeText={setWeekOverride}
+                  onFocus={retryKeyboardAwareUpdate}
                 />
               </View>
               <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('week')} disabled={isSavingWeek}>
@@ -1234,7 +1270,8 @@ export function LogScreen() {
               if (profile.month_target_date === monthStr && profile.month_target_minutes) return profile.month_target_minutes
               const daily = profile.weekday_target_minutes ?? 60
               const weekend = profile.weekend_target_minutes ?? 120
-              return daily * 22 + weekend * 8
+              const { weekdays, weekends } = countMonthWeekdays(monthStart.getUTCFullYear(), monthStart.getUTCMonth())
+              return daily * weekdays + weekend * weekends
             })()}分`} />
             <ProgressBar progress={Math.min(100, Math.round((() => {
               const monthStart = getThisMonthStart()
@@ -1250,7 +1287,8 @@ export function LogScreen() {
                 if (profile.month_target_date === monthStr2 && profile.month_target_minutes) return profile.month_target_minutes
                 const daily = profile.weekday_target_minutes ?? 60
                 const weekend = profile.weekend_target_minutes ?? 120
-                return daily * 22 + weekend * 8
+                const { weekdays, weekends } = countMonthWeekdays(monthStart2.getUTCFullYear(), monthStart2.getUTCMonth())
+                return daily * weekdays + weekend * weekends
               })()
               return (monthMinutes / Math.max(1, target)) * 100
             })()))} />
@@ -1263,6 +1301,7 @@ export function LogScreen() {
                   keyboardType="numeric"
                   value={monthOverride}
                   onChangeText={setMonthOverride}
+                  onFocus={retryKeyboardAwareUpdate}
                 />
               </View>
               <Pressable style={styles.primaryButton} onPress={() => handleSaveTarget('month')} disabled={isSavingMonth}>
@@ -1289,8 +1328,7 @@ export function LogScreen() {
           return null
         })()}
 
-      </ScrollView>
-
+      </KeyboardAwareScrollView>
     </KeyboardAvoidingView>
   )
 }

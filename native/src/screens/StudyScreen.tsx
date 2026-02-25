@@ -278,10 +278,17 @@ export function StudyScreen() {
       Alert.alert('教材を選択してください')
       return
     }
-    setStartTime(Date.now())
-    setPausedTime(0)
-    setCurrentSeconds(0)
-    setIsRunning(true)
+    if (currentSeconds > 0) {
+      // Resume: continue from where we left off (do NOT reset pausedTime)
+      setStartTime(Date.now())
+      setIsRunning(true)
+    } else {
+      // Fresh start
+      setStartTime(Date.now())
+      setPausedTime(0)
+      setCurrentSeconds(0)
+      setIsRunning(true)
+    }
   }
 
   const handlePause = () => {
@@ -512,26 +519,38 @@ export function StudyScreen() {
         )}
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>リアルタイム計測</Text>
-          <Text style={styles.timer}>{formatTimer(currentSeconds)}</Text>
-          <Text style={styles.mutedText}>教材を選択してください</Text>
-          <Pressable
-            style={[styles.startButton, !selectedBookId && styles.startButtonDisabled]}
-            onPress={handleStart}
-            disabled={!selectedBookId}
-          >
-            <Ionicons name="play" size={18} color="#fff" />
-            <Text style={styles.startButtonText}>
-              {selectedBookId ? '開始' : '教材を選択してください'}
-            </Text>
-          </Pressable>
-          {isRunning && (
-            <View style={styles.row}>
-              <Pressable style={styles.outlineButton} onPress={handlePause}>
-                <Text style={styles.outlineButtonText}>一時停止</Text>
+          <Text style={styles.cardTitle}>ストップウォッチ</Text>
+          <View style={styles.timerContainer}>
+            <Text style={styles.timer}>{formatTimer(currentSeconds)}</Text>
+            {selectedBook && !isRunning && currentSeconds === 0 && (
+              <Text style={styles.readyText}>{selectedBook.name}を学習予定</Text>
+            )}
+            {!selectedBookId && (
+              <Text style={styles.warningText}>まずは教材を選択してください</Text>
+            )}
+          </View>
+
+          {!isRunning ? (
+            <Pressable
+              style={[styles.mainStartButton, !selectedBookId && styles.disabledStartButton]}
+              onPress={handleStart}
+              disabled={!selectedBookId}
+            >
+              <Ionicons name="play" size={24} color={selectedBookId ? '#ffffff' : '#94a3b8'} />
+              <Text style={[styles.mainStartText, !selectedBookId && styles.disabledStartText]}>
+                {currentSeconds > 0 ? '再開' : 'スタート'}
+              </Text>
+            </Pressable>
+          ) : (
+            <View style={styles.activeControls}>
+              <Pressable style={styles.pauseCircleButton} onPress={handlePause}>
+                <Ionicons name="pause" size={28} color="#f59e0b" />
+                <Text style={styles.pauseCircleText}>一時停止</Text>
               </Pressable>
-              <Pressable style={styles.primaryButton} onPress={handleStop}>
-                <Text style={styles.primaryButtonText}>停止・保存</Text>
+
+              <Pressable style={styles.stopCircleButton} onPress={handleStop}>
+                <Ionicons name="stop" size={28} color="#ef4444" />
+                <Text style={styles.stopCircleText}>終了・保存</Text>
               </Pressable>
             </View>
           )}
@@ -546,27 +565,26 @@ export function StudyScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
+    backgroundColor: '#ffffff',
   },
   container: {
-    padding: 16,
-    backgroundColor: '#f8fafc',
-    gap: 12,
+    padding: 24,
+    backgroundColor: '#ffffff',
+    gap: 40,
+    paddingBottom: 60,
   },
   card: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 16,
-    padding: 16,
-    backgroundColor: '#ffffff',
-    gap: 10,
+    gap: 16,
   },
   cardTitle: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
+    letterSpacing: 0.5,
   },
   cardSubtitle: {
-    fontSize: 12,
-    color: '#94a3b8',
+    fontSize: 14,
+    color: '#64748b',
   },
   row: {
     flexDirection: 'row',
@@ -842,10 +860,10 @@ const styles = StyleSheet.create({
   bookImageBox: {
     width: 64,
     height: 64,
-    borderRadius: 8,
-    backgroundColor: '#f1f5f9',
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#f1f5f9',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -900,27 +918,102 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
   },
-  timer: {
-    fontSize: 42,
-    fontWeight: '700',
-    textAlign: 'center',
-    color: '#2563eb',
-  },
-  startButton: {
-    backgroundColor: '#7fb8e5',
-    paddingVertical: 12,
-    borderRadius: 12,
+  timerContainer: {
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+  },
+  timer: {
+    fontSize: 72,
+    fontWeight: '300',
+    color: '#0f172a',
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -2,
+  },
+  readyText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#3b82f6',
+    fontWeight: '700',
+  },
+  warningText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#ef4444',
+    fontWeight: '700',
+  },
+  mainStartButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563eb',
+    paddingVertical: 18,
+    borderRadius: 999,
+    gap: 8,
+    marginTop: 8,
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  disabledStartButton: {
+    backgroundColor: '#f1f5f9',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  mainStartText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  disabledStartText: {
+    color: '#94a3b8',
+  },
+  activeControls: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 8,
+    gap: 32,
+    marginTop: 8,
   },
-  startButtonDisabled: {
-    backgroundColor: '#cbd5e1',
+  pauseCircleButton: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#fef3c7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#f59e0b',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  startButtonText: {
-    color: '#ffffff',
-    fontWeight: '600',
+  pauseCircleText: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#b45309',
+  },
+  stopCircleButton: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#fee2e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  stopCircleText: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#b91c1c',
   },
   successCard: {
     backgroundColor: '#ecfdf3',

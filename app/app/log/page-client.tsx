@@ -347,6 +347,16 @@ export function LogPageClient() {
     return `${year}-${month}-${day}T12:00:00.000Z`
   }
 
+  const splitThemes = (text: string): string[] => {
+    const lines = text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/^[-*•・]\s*/, '').trim())
+      .filter(Boolean)
+    return lines.length > 0 ? lines : [text.trim() || '全体復習']
+  }
+
   const ensureReviewTasks = async (
     supabase: ReturnType<typeof createClient>,
     userId: string,
@@ -363,22 +373,52 @@ export function LogPageClient() {
 
     if (existing && existing.length > 0) return
 
+    const { data: studyLog } = await supabase
+      .from('study_logs')
+      .select('subject, reference_book_id')
+      .eq('id', studyLogId)
+      .single()
+
+    const subject = studyLog?.subject?.trim() || 'その他'
+    const referenceBookId = studyLog?.reference_book_id ?? null
+
     const baseDate = new Date(startedAt)
     baseDate.setHours(12, 0, 0, 0)
-    const reviewDays = [1, 3, 7, 14, 30]
-    const tasks = reviewDays.map((days) => {
-      const due = new Date(baseDate)
-      due.setDate(due.getDate() + days)
-      return {
-        user_id: userId,
-        study_log_id: studyLogId,
-        due_at: due.toISOString(),
-        status: 'pending',
+    const firstDueDate = new Date(baseDate)
+    firstDueDate.setDate(firstDueDate.getDate() + 1)
+
+    const themes = splitThemes(note)
+    for (const themeContent of themes) {
+      const { data: material, error: matError } = await supabase
+        .from('review_materials')
+        .insert({
+          user_id: userId,
+          subject,
+          content: themeContent,
+          reference_book_id: referenceBookId,
+          study_date: startedAt,
+          sm2_interval: 1,
+          sm2_ease_factor: 2.5,
+          sm2_repetitions: 1,
+        })
+        .select('id')
+        .single()
+
+      if (matError) {
+        console.warn('Failed to create review material:', matError)
+        continue
       }
-    })
-    const { error } = await supabase.from('review_tasks').insert(tasks)
-    if (error) {
-      console.warn('Failed to create review tasks:', error)
+      if (material?.id) {
+        const { error: taskError } = await supabase.from('review_tasks').insert({
+          user_id: userId,
+          review_material_id: material.id,
+          due_at: firstDueDate.toISOString(),
+          status: 'pending',
+        })
+        if (taskError) {
+          console.warn('Failed to create review task:', taskError)
+        }
+      }
     }
   }
 
