@@ -242,7 +242,7 @@ export function StudyScreen() {
   const handleDeleteBook = async (bookId: string) => {
     Alert.alert(
       '教材の削除',
-      'この教材を削除してもよろしいですか？\n削除すると復元できません。',
+      'この教材を削除してもよろしいですか？\n削除した教材は一覧から消えます。',
       [
         {
           text: 'キャンセル',

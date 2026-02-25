@@ -1135,7 +1135,7 @@ export function ReviewScreen() {
     const handleDeleteBook = async (bookId: string) => {
         Alert.alert(
             '教材の削除',
-            'この教材を削除してもよろしいですか？\n削除すると復元できません。',
+            'この教材を削除してもよろしいですか？\n削除した教材は一覧から消えます。',
             [
                 {
                     text: 'キャンセル',
@@ -1260,7 +1260,9 @@ export function ReviewScreen() {
         const effectiveRating: SM2Rating = isSingleTheme
             ? rating
             : (() => {
-                const ratings = themes.map((t) => (t === theme ? rating : themeRatingsInTask[getThemeKey(taskId, t)] ?? 'perfect'))
+                // 未評価テーマは現在のrating（最も厳しい評価）をデフォルトにする
+                // ※ 'perfect' をデフォルトにすると「うろ覚え」→「完璧」に化けるバグが起きる
+                const ratings = themes.map((t) => (t === theme ? rating : themeRatingsInTask[getThemeKey(taskId, t)] ?? rating))
                 return ratings.some((r) => r === 'hard') ? 'hard' : ratings.some((r) => r === 'good') ? 'good' : 'perfect'
             })()
 
@@ -1315,6 +1317,8 @@ export function ReviewScreen() {
                 content: theme,
                 rating: effectiveRating,
             }).then(({ error }) => { if (error) console.warn('flashcard_attempts insert skipped:', error.message) })
+            // 履歴モーダルが開いている場合は即時リロードして最新データを反映
+            if (showHistoryModal) loadHistory()
         } else if (source === 'quiz') {
             const quiz = quizByTask[taskId]
             const themeQuiz = quiz?.themes[theme]
@@ -1937,17 +1941,53 @@ export function ReviewScreen() {
                 const correctCount = attempts.filter((a) => a.is_correct).length
                 const recentCorrectRatio = attempts.length > 0 ? correctCount / attempts.length : 0
 
-                let retentionScore = Math.round(recentCorrectRatio * 100)
-                if (
-                    group.sm2_interval != null
-                    && group.sm2_ease_factor != null
-                    && group.sm2_repetitions != null
-                ) {
-                    const intervalNorm = clamp(group.sm2_interval / 14, 0, 1)
-                    const easeNorm = clamp((group.sm2_ease_factor - 1.3) / (2.8 - 1.3), 0, 1)
-                    const repetitionNorm = clamp(group.sm2_repetitions / 8, 0, 1)
-                    retentionScore = Math.round((intervalNorm * 0.45 + easeNorm * 0.2 + repetitionNorm * 0.35) * 100)
+                // ── 定数（後から調整しやすいよう分離）──
+                const INTERVAL_MAX = 90       // intervalの正規化上限（日数）
+                const EASE_MIN = 1.3
+                const EASE_MAX = 2.8
+                const REP_MAX = 8             // repetitionsの正規化上限
+                const W_INTERVAL = 0.5        // 重み: interval
+                const W_EASE = 0.2            // 重み: ease factor
+                const W_REP = 0.3             // 重み: repetitions
+                const DECAY_K = Math.LN2      // 忘却速度定数 (ln2 ≈ 0.693 → 期日に50%)
+
+                // ── Step1: 到達上限（Mastery Ceiling）──
+                const sm2Interval = group.sm2_interval ?? 0
+                const sm2Ease = group.sm2_ease_factor ?? EASE_MIN
+                const sm2Reps = group.sm2_repetitions ?? 0
+
+                let masteryCeiling: number
+                if (sm2Reps === 0) {
+                    // 未学習 or 不正解リセット直後
+                    masteryCeiling = 0.05
+                } else {
+                    const intervalNorm = clamp(Math.log(1 + sm2Interval) / Math.log(1 + INTERVAL_MAX), 0, 1)
+                    const easeNorm = clamp((sm2Ease - EASE_MIN) / (EASE_MAX - EASE_MIN), 0, 1)
+                    const repNorm = clamp(sm2Reps / REP_MAX, 0, 1)
+                    masteryCeiling = intervalNorm * W_INTERVAL + easeNorm * W_EASE + repNorm * W_REP
                 }
+
+                // ── Step2: 時間減衰（Time Decay）──
+                const intervalDays = Math.max(sm2Interval, 1)
+                const elapsedMs = latestAttempt ? Date.now() - toMillis(latestAttempt.created_at) : 0
+                const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24)
+                const decayRatio = elapsedDays / intervalDays
+                const timeDecay = Math.exp(-DECAY_K * decayRatio)
+
+                // ── Step3: 直近回答ペナルティ──
+                const latestRating = latestAttempt?.rating ?? null
+                const latestIsCorrect = latestAttempt?.is_correct ?? null
+                let recentPenalty: number
+                if (latestIsCorrect === false || latestRating === 'hard') {
+                    recentPenalty = 0.1  // 不正解・苦手: 上限を10%に制限
+                } else if (latestRating === 'good') {
+                    recentPenalty = 0.8  // うろ覚え: 上限80%
+                } else {
+                    recentPenalty = 1.0  // 完璧: ペナルティなし
+                }
+
+                // ── 最終スコア ──
+                const retentionScore = clamp(Math.round(masteryCeiling * timeDecay * recentPenalty * 100), 0, 100)
 
                 const retentionLabel = retentionScore >= 75 ? '高' : retentionScore >= 45 ? '中' : '低'
                 const retentionColor = retentionScore >= 75 ? '#16a34a' : retentionScore >= 45 ? '#d97706' : '#dc2626'
@@ -2035,17 +2075,51 @@ export function ReviewScreen() {
                 const correctCount = attempts.filter((a) => a.rating === 'perfect' || a.rating === 'good').length
                 const recentCorrectRatio = attempts.length > 0 ? correctCount / attempts.length : 0
 
-                let retentionScore = Math.round(recentCorrectRatio * 100)
-                if (
-                    group.sm2_interval != null
-                    && group.sm2_ease_factor != null
-                    && group.sm2_repetitions != null
-                ) {
-                    const intervalNorm = clamp(group.sm2_interval / 14, 0, 1)
-                    const easeNorm = clamp((group.sm2_ease_factor - 1.3) / (2.8 - 1.3), 0, 1)
-                    const repetitionNorm = clamp(group.sm2_repetitions / 8, 0, 1)
-                    retentionScore = Math.round((intervalNorm * 0.45 + easeNorm * 0.2 + repetitionNorm * 0.35) * 100)
+                // ── 定数（後から調整しやすいよう分離）──
+                const INTERVAL_MAX = 90
+                const EASE_MIN = 1.3
+                const EASE_MAX = 2.8
+                const REP_MAX = 8
+                const W_INTERVAL = 0.5
+                const W_EASE = 0.2
+                const W_REP = 0.3
+                const DECAY_K = Math.LN2
+
+                // ── Step1: 到達上限（Mastery Ceiling）──
+                const sm2Interval = group.sm2_interval ?? 0
+                const sm2Ease = group.sm2_ease_factor ?? EASE_MIN
+                const sm2Reps = group.sm2_repetitions ?? 0
+
+                let masteryCeiling: number
+                if (sm2Reps === 0) {
+                    masteryCeiling = 0.05
+                } else {
+                    const intervalNorm = clamp(Math.log(1 + sm2Interval) / Math.log(1 + INTERVAL_MAX), 0, 1)
+                    const easeNorm = clamp((sm2Ease - EASE_MIN) / (EASE_MAX - EASE_MIN), 0, 1)
+                    const repNorm = clamp(sm2Reps / REP_MAX, 0, 1)
+                    masteryCeiling = intervalNorm * W_INTERVAL + easeNorm * W_EASE + repNorm * W_REP
                 }
+
+                // ── Step2: 時間減衰（Time Decay）──
+                const intervalDays = Math.max(sm2Interval, 1)
+                const elapsedMs = latestAttempt ? Date.now() - toMillis(latestAttempt.created_at) : 0
+                const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24)
+                const decayRatio = elapsedDays / intervalDays
+                const timeDecay = Math.exp(-DECAY_K * decayRatio)
+
+                // ── Step3: 直近回答ペナルティ──
+                const latestRating = latestAttempt?.rating ?? null
+                let recentPenalty: number
+                if (latestRating === 'hard') {
+                    recentPenalty = 0.1
+                } else if (latestRating === 'good') {
+                    recentPenalty = 0.8
+                } else {
+                    recentPenalty = 1.0
+                }
+
+                // ── 最終スコア ──
+                const retentionScore = clamp(Math.round(masteryCeiling * timeDecay * recentPenalty * 100), 0, 100)
 
                 const retentionLabel = retentionScore >= 75 ? '高' : retentionScore >= 45 ? '中' : '低'
                 const retentionColor = retentionScore >= 75 ? '#16a34a' : retentionScore >= 45 ? '#d97706' : '#dc2626'
