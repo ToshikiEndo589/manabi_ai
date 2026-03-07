@@ -31,6 +31,23 @@ function buildUsageData(usage: Usage) {
   }
 }
 
+function extractMessageText(content: unknown): string {
+  if (typeof content === 'string') return content.trim()
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part && typeof part === 'object' && 'text' in part) {
+          const text = (part as { text?: unknown }).text
+          return typeof text === 'string' ? text : ''
+        }
+        return ''
+      })
+      .join('\n')
+      .trim()
+  }
+  return ''
+}
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -70,7 +87,7 @@ export async function POST(req: NextRequest) {
     ].filter(Boolean)
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-5-mini',
+      model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: contextLines.join('\n') },
@@ -78,12 +95,21 @@ export async function POST(req: NextRequest) {
       max_completion_tokens: 220,
     })
 
-    const answerRaw = completion.choices?.[0]?.message?.content?.trim()
-    if (!answerRaw) {
-      return NextResponse.json({ error: 'empty response' }, { status: 500 })
-    }
+    const answerRaw = extractMessageText(completion.choices?.[0]?.message?.content)
+    const refusal = (completion.choices?.[0]?.message as { refusal?: string } | undefined)?.refusal
 
-    const answer = answerRaw.replace(/\n{3,}/g, '\n\n').trim().slice(0, 1200)
+    let answer = answerRaw.replace(/\n{3,}/g, '\n\n').trim().slice(0, 1200)
+    if (!answer) {
+      if (typeof refusal === 'string' && refusal.trim().length > 0) {
+        answer = refusal.trim().slice(0, 1200)
+      } else {
+        console.warn('[theme-qa] empty model output', {
+          finishReason: completion.choices?.[0]?.finish_reason,
+          hasRefusal: Boolean(refusal),
+        })
+        answer = '回答を生成できませんでした。質問を少し短くして、もう一度お試しください 🙏'
+      }
+    }
 
     const usage = completion.usage as Usage | undefined
     const usageData = usage ? buildUsageData(usage) : undefined
