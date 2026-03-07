@@ -39,9 +39,9 @@ export async function POST(req: NextRequest) {
     const subjectText =
       typeof body?.subject === 'string' && body.subject.trim() ? body.subject.trim() : '未分類'
     const explanationText =
-      typeof body?.explanation === 'string' ? body.explanation.trim().slice(0, 3000) : ''
+      typeof body?.explanation === 'string' ? body.explanation.trim().slice(0, 2000) : ''
     const quizQuestionText =
-      typeof body?.quizQuestion === 'string' ? body.quizQuestion.trim().slice(0, 3000) : ''
+      typeof body?.quizQuestion === 'string' ? body.quizQuestion.trim().slice(0, 2000) : ''
 
     if (!questionText) {
       return NextResponse.json({ error: 'question is required' }, { status: 400 })
@@ -50,11 +50,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'theme is required' }, { status: 400 })
     }
 
-    const systemPrompt =
-      'あなたは学習支援AIです。' +
-      'ユーザーの質問に日本語で正確かつ簡潔に答えてください。' +
-      '専門用語は必要に応じて短く補足し、曖昧な点は推測しすぎないでください。' +
-      '最後に次の学習アクションを1つだけ提案してください。'
+    const systemPrompt = [
+      'You are a study assistant.',
+      'Respond in natural Japanese.',
+      'Keep answers concise and practical.',
+      'Use 1  short sentences.',
+      'Include 1 appropriate emoji naturally in the answer.',
+      'Use at most 3 bullet points only when needed.',
+      'Start with a direct one-line answer first.',
+      'Do not mention model names.',
+    ].join(' ')
 
     const contextLines = [
       `科目: ${subjectText}`,
@@ -70,26 +75,29 @@ export async function POST(req: NextRequest) {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: contextLines.join('\n') },
       ],
+      max_completion_tokens: 220,
     })
 
-    const answer = completion.choices?.[0]?.message?.content?.trim()
-    if (!answer) {
+    const answerRaw = completion.choices?.[0]?.message?.content?.trim()
+    if (!answerRaw) {
       return NextResponse.json({ error: 'empty response' }, { status: 500 })
     }
+
+    const answer = answerRaw.replace(/\n{3,}/g, '\n\n').trim().slice(0, 1200)
 
     const usage = completion.usage as Usage | undefined
     const usageData = usage ? buildUsageData(usage) : undefined
 
     if (usageData) {
-      console.log('--- OpenAI API Usage (gpt-5-mini / theme-qa) ---')
+      console.log('--- OpenAI API Usage (theme-qa) ---')
       console.log(`Input Tokens:  ${usageData.inputTokens} ($${usageData.inputCostUSD.toFixed(6)})`)
       console.log(`Output Tokens: ${usageData.outputTokens} ($${usageData.outputCostUSD.toFixed(6)})`)
       console.log(`Total Tokens:  ${usageData.totalTokens}`)
       console.log(`Total Cost:    $${usageData.totalCostUSD.toFixed(6)} (¥${usageData.totalCostJPY.toFixed(4)})`)
-      console.log('-------------------------------------------------')
+      console.log('------------------------------------')
     }
 
-    return NextResponse.json({ answer, model: 'gpt-5-mini', usage: usageData })
+    return NextResponse.json({ answer, usage: usageData })
   } catch (error) {
     console.error('Theme QA API error:', error)
     const errorMessage = error instanceof Error ? error.message : 'server error'

@@ -1519,7 +1519,7 @@ export function ReviewScreen() {
 
             // Calculate and log usage if provided by the API
             if (data.usage) {
-                console.log('--- OpenAI API Usage (gpt-5-mini) ---')
+                console.log('--- OpenAI API Usage (quiz) ---')
                 console.log(`Input Tokens:  ${data.usage.inputTokens} ($${data.usage.inputCostUSD.toFixed(6)})`)
                 console.log(`Output Tokens: ${data.usage.outputTokens} ($${data.usage.outputCostUSD.toFixed(6)})`)
                 console.log(`Total Tokens:  ${data.usage.totalTokens}`)
@@ -1657,6 +1657,16 @@ export function ReviewScreen() {
             }
 
             const data = await response.json()
+
+            if (data.usage) {
+                console.log('--- OpenAI API Usage (theme-qa) ---')
+                console.log(`Input Tokens:  ${data.usage.inputTokens} ($${data.usage.inputCostUSD.toFixed(6)})`)
+                console.log(`Output Tokens: ${data.usage.outputTokens} ($${data.usage.outputCostUSD.toFixed(6)})`)
+                console.log(`Total Tokens:  ${data.usage.totalTokens}`)
+                console.log(`Total Cost:    $${data.usage.totalCostUSD.toFixed(6)} (約 ${data.usage.totalCostJPY.toFixed(4)} 円)`)
+                console.log('---------------------------------------')
+            }
+
             const answerText = typeof data?.answer === 'string' ? data.answer.trim() : ''
             if (!answerText) {
                 throw new Error('AIの回答が空でした。')
@@ -2897,55 +2907,65 @@ export function ReviewScreen() {
                     behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 >
                     <View style={styles.askAIModalCard}>
-                        <View style={styles.askAIModalHeader}>
-                            <Text style={styles.askAIModalTitle}>AIに質問（gpt-5-mini）</Text>
-                            <Pressable onPress={closeAskAIModal} disabled={askAILoading} hitSlop={10}>
-                                <Ionicons name="close" size={22} color="#64748b" />
-                            </Pressable>
-                        </View>
-                        <Text style={styles.askAIModalThemeText}>
-                            {askAIContext ? `${askAIContext.subject} / ${askAIContext.theme}` : ''}
-                        </Text>
-
-                        <Text style={styles.askAIModalLabel}>質問内容</Text>
-                        <TextInput
-                            style={styles.askAIModalInput}
-                            value={askAIInput}
-                            onChangeText={setAskAIInput}
-                            multiline
-                            placeholder="この解説のここが分からない、などを入力"
-                            textAlignVertical="top"
-                            editable={!askAILoading}
-                        />
-
-                        <View style={styles.askAIModalActions}>
-                            <Pressable style={styles.askAISecondaryButton} onPress={closeAskAIModal} disabled={askAILoading}>
-                                <Text style={styles.askAISecondaryButtonText}>閉じる</Text>
-                            </Pressable>
-                            <Pressable
-                                style={[styles.askAIPrimaryButton, askAILoading && { opacity: 0.7 }]}
-                                onPress={handleSubmitAskAI}
-                                disabled={askAILoading}
-                            >
-                                <Text style={styles.askAIPrimaryButtonText}>
-                                    {askAILoading ? '質問中...' : 'AIに質問'}
-                                </Text>
-                            </Pressable>
-                        </View>
-
-                        {askAILoading && (
-                            <View style={styles.askAILoadingWrap}>
-                                <ActivityIndicator size="small" color="#7c3aed" />
+                        <ScrollView
+                            style={styles.askAIModalScroll}
+                            contentContainerStyle={styles.askAIModalScrollContent}
+                            keyboardShouldPersistTaps="handled"
+                            nestedScrollEnabled
+                            showsVerticalScrollIndicator
+                        >
+                            <View style={styles.askAIModalHeader}>
+                                <Text style={styles.askAIModalTitle}>AIに質問</Text>
+                                <Pressable onPress={closeAskAIModal} disabled={askAILoading} hitSlop={10}>
+                                    <Ionicons name="close" size={22} color="#64748b" />
+                                </Pressable>
                             </View>
-                        )}
+                            <Text style={styles.askAIModalThemeText}>
+                                {askAIContext ? `${askAIContext.subject} / ${askAIContext.theme}` : ''}
+                            </Text>
 
-                        {askAIAnswer ? (
-                            <View style={styles.askAIAnswerCard}>
-                                <Text style={styles.askAIAnswerLabel}>AIの回答</Text>
-                                <Text style={styles.askAIAnswerText}>{askAIAnswer}</Text>
-                                <Text style={styles.askAIAnswerHint}>この質問と回答はテーマ履歴に保存されます。</Text>
+                            <Text style={styles.askAIModalLabel}>質問内容</Text>
+                            <TextInput
+                                style={styles.askAIModalInput}
+                                value={askAIInput}
+                                onChangeText={setAskAIInput}
+                                multiline
+                                placeholder="この解説のここが分からない、などを入力"
+                                textAlignVertical="top"
+                                editable={!askAILoading}
+                            />
+
+                            <View style={styles.askAIModalActions}>
+                                <Pressable style={styles.askAISecondaryButton} onPress={closeAskAIModal} disabled={askAILoading}>
+                                    <Text style={styles.askAISecondaryButtonText}>閉じる</Text>
+                                </Pressable>
+                                <Pressable
+                                    style={[styles.askAIPrimaryButton, askAILoading && { opacity: 0.7 }]}
+                                    onPress={handleSubmitAskAI}
+                                    disabled={askAILoading}
+                                >
+                                    <Text style={styles.askAIPrimaryButtonText}>
+                                        {askAILoading ? '質問中...' : 'AIに質問'}
+                                    </Text>
+                                </Pressable>
                             </View>
-                        ) : null}
+
+                            {askAILoading && (
+                                <View style={styles.askAILoadingWrap}>
+                                    <ActivityIndicator size="small" color="#7c3aed" />
+                                </View>
+                            )}
+
+                            {askAIAnswer ? (
+                                <View style={styles.askAIAnswerCard}>
+                                    <Text style={styles.askAIAnswerLabel}>AIの回答</Text>
+                                    <ScrollView style={styles.askAIAnswerScroll} nestedScrollEnabled showsVerticalScrollIndicator>
+                                        <Text style={styles.askAIAnswerText}>{askAIAnswer}</Text>
+                                    </ScrollView>
+                                    <Text style={styles.askAIAnswerHint}>この質問と回答はテーマ履歴に保存されます。</Text>
+                                </View>
+                            ) : null}
+                        </ScrollView>
                     </View>
                 </KeyboardAvoidingView>
             </Modal>
@@ -3203,7 +3223,7 @@ export function ReviewScreen() {
                                                             {[...group.qaLogs].reverse().map((qaLog) => (
                                                                 <View key={qaLog.id} style={styles.historyQAItem}>
                                                                     <Text style={styles.historyQAMeta}>
-                                                                        {formatHistoryDate(qaLog.created_at)} {qaLog.model ? `(${qaLog.model})` : ''}
+                                                                        {formatHistoryDate(qaLog.created_at)}
                                                                     </Text>
                                                                     <Text style={styles.historyQAQuestion}>Q. {qaLog.question}</Text>
                                                                     <Text style={styles.historyQAAnswer}>A. {qaLog.answer}</Text>
@@ -4639,7 +4659,16 @@ const styles = StyleSheet.create({
         backgroundColor: '#ffffff',
         borderRadius: 16,
         padding: 16,
-        maxHeight: '86%',
+        maxHeight: '90%',
+        width: '100%',
+        alignSelf: 'center',
+        overflow: 'hidden',
+    },
+    askAIModalScroll: {
+        width: '100%',
+    },
+    askAIModalScrollContent: {
+        paddingBottom: 4,
     },
     askAIModalHeader: {
         flexDirection: 'row',
@@ -4714,6 +4743,12 @@ const styles = StyleSheet.create({
         padding: 12,
         borderWidth: 1,
         borderColor: '#e2e8f0',
+        maxHeight: 380,
+        minHeight: 180,
+        overflow: 'hidden',
+    },
+    askAIAnswerScroll: {
+        maxHeight: 320,
     },
     askAIAnswerLabel: {
         fontSize: 12,
@@ -4725,6 +4760,7 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#1e293b',
         lineHeight: 20,
+        flexShrink: 1,
     },
     askAIAnswerHint: {
         fontSize: 11,
