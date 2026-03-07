@@ -113,9 +113,9 @@ export function LogScreen() {
 
   const [materialRangeType, setMaterialRangeType] = useState<'day' | 'week' | 'month' | 'total'>('day')
   const [dayOffset, setDayOffset] = useState(0)
-  const [weekOffset, setWeekOffset] = useState(1)
-  const [monthOffset, setMonthOffset] = useState(1)
-  const [chartRange, setChartRange] = useState<'7' | '30'>('7')
+  const [weekOffset, setWeekOffset] = useState(0)
+  const [monthOffset, setMonthOffset] = useState(0)
+  const [chartRange, setChartRange] = useState<'day' | 'month'>('day')
   const [chartOffset, setChartOffset] = useState(0)
   const [showShareBanner, setShowShareBanner] = useState(true)
   const [showRangeMenu, setShowRangeMenu] = useState(false)
@@ -139,7 +139,7 @@ export function LogScreen() {
     })
   }, [])
 
-  // 復習カードの修正
+  // 日付入力の補助関数
 
   const normalizePickerDate = (date: Date) => {
     // Reset to midnight local time to avoid confusion
@@ -147,8 +147,7 @@ export function LogScreen() {
   }
 
   const buildStartedAtFromDisplayedDate = (date: Date) => {
-    // ユーザーが選んだ「カレンダー日」をそのまま保存するため、ローカルの年月日を使う
-    // 00:00 UTC だとタイムゾーンによって表示が前後するため、12:00 UTC で保存する
+    // Keep noon UTC so date shifts are avoided across time zones.
     const year = date.getFullYear()
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
@@ -497,7 +496,7 @@ export function LogScreen() {
   const deleteGroup = async (group: typeof groupedEditLogs[0]) => {
     Alert.alert(
       '削除確認',
-      `${group.studyDay}の${group.subject}の記録を削除しますか？`,
+      `${group.studyDay} の ${group.subject} の記録を削除しますか？`,
       [
         { text: 'キャンセル', style: 'cancel' },
         {
@@ -521,8 +520,8 @@ export function LogScreen() {
   const buildShareText = () => {
     const stats = `今日の学習: ${formatMinutes(summary.today)} / 今週: ${formatMinutes(summary.week)} / 今月: ${formatMinutes(
       summary.month
-    )} / 累計: ${formatMinutes(summary.total)}`
-    return `${stats}\n\n#まなびAI #まなびAIのタイムライン`
+    )} / 合計: ${formatMinutes(summary.total)}`
+    return `${stats}\n\n#まなびAI #学習記録`
   }
 
   const handleShare = async () => {
@@ -573,8 +572,39 @@ export function LogScreen() {
   }, [studyLogs, monthOffset])
 
   const chartData = useMemo(() => {
-    const days = 7
     const subjects = Array.from(new Set(studyLogs.map((log) => getLogDisplayName(log))))
+
+    if (chartRange === 'month') {
+      const months = 6
+      const currentMonthStart = startOfMonth()
+      return Array.from({ length: months }, (_, index) => {
+        const monthsAgo = months - 1 - index + chartOffset * months
+        const start = new Date(currentMonthStart.getFullYear(), currentMonthStart.getMonth() - monthsAgo, 1)
+        const end = new Date(start.getFullYear(), start.getMonth() + 1, 1)
+        const totals: Record<string, number> = {}
+        subjects.forEach((subject) => {
+          totals[subject] = 0
+        })
+        studyLogs.forEach((log) => {
+          const logDate = new Date(log.started_at)
+          if (logDate >= start && logDate < end) {
+            const key = getLogDisplayName(log)
+            totals[key] = (totals[key] || 0) + log.study_minutes
+          }
+        })
+        const totalMinutes = Object.values(totals).reduce((sum, value) => sum + value, 0)
+        return {
+          date: `${start.getFullYear()}/${String(start.getMonth() + 1).padStart(2, '0')}`,
+          label: `${start.getMonth() + 1}月`,
+          weekday: `${String(start.getFullYear()).slice(2)}年`,
+          totals,
+          totalMinutes,
+          subjects,
+        }
+      })
+    }
+
+    const days = 7
     return Array.from({ length: days }, (_, index) => {
       const date = new Date()
       date.setDate(date.getDate() - (days - 1 - index + chartOffset * days))
@@ -604,13 +634,15 @@ export function LogScreen() {
         subjects,
       }
     })
-  }, [chartOffset, studyLogs, referenceBooks])
+  }, [chartRange, chartOffset, studyLogs, referenceBooks])
+
+  const chartTitle = chartRange === 'day' ? '直近7日' : '直近6ヶ月'
 
   const rangeTypeLabel = useMemo(() => {
-    if (materialRangeType === 'day') return '一日'
-    if (materialRangeType === 'week') return '一週間'
-    if (materialRangeType === 'month') return '一ヶ月'
-    return '総計'
+    if (materialRangeType === 'day') return '1日'
+    if (materialRangeType === 'week') return '1週間'
+    if (materialRangeType === 'month') return '1ヶ月'
+    return '累計'
   }, [materialRangeType])
 
   const offsetLabel = useMemo(() => {
@@ -623,7 +655,7 @@ export function LogScreen() {
     if (materialRangeType === 'month') {
       return monthOffset === 0 ? '今月' : monthOffset === 1 ? '先月' : `${monthOffset}ヶ月前`
     }
-    return '総計'
+    return '累計'
   }, [materialRangeType, dayOffset, weekOffset, monthOffset])
 
   const cycleRangeType = () => {
@@ -663,10 +695,10 @@ export function LogScreen() {
   }, [studyLogs, referenceBooks])
 
   const rangeOptions: { label: string; value: 'day' | 'week' | 'month' | 'total' }[] = [
-    { label: '一日', value: 'day' },
+    { label: '1日', value: 'day' },
     { label: '1週間', value: 'week' },
     { label: '1ヶ月', value: 'month' },
-    { label: '総累計', value: 'total' },
+    { label: '累計', value: 'total' },
   ]
 
   const offsetOptions = useMemo(() => {
@@ -743,7 +775,7 @@ export function LogScreen() {
                 { label: '今日', value: summary.today },
                 { label: '今週', value: summary.week },
                 { label: '今月', value: summary.month },
-                { label: '総計', value: summary.total },
+                { label: '合計', value: summary.total },
               ].map((item) => (
                 <View key={item.label} style={styles.summaryCard}>
                   <Text style={styles.summaryValue}>{formatMinutes(item.value)}</Text>
@@ -818,7 +850,7 @@ export function LogScreen() {
           <View style={styles.shareBanner}>
             <Pressable style={styles.row} onPress={handleShare}>
               <Ionicons name="share-social-outline" size={18} color="#2563eb" />
-              <Text style={styles.shareText}>学習記録を共有</Text>
+              <Text style={styles.shareText}>学習記録をシェアする</Text>
             </Pressable>
             <Pressable style={styles.closeButton} onPress={() => setShowShareBanner(false)}>
               <Ionicons name="close" size={16} color="#334155" />
@@ -835,7 +867,7 @@ export function LogScreen() {
               >
                 <Ionicons name="chevron-back" size={16} color="#334155" />
               </Pressable>
-              <Text style={styles.sectionTitle}>過去7日</Text>
+              <Text style={styles.sectionTitle}>{chartTitle}</Text>
               <Pressable
                 style={[styles.navButton, chartOffset === 0 && styles.navButtonDisabled]}
                 onPress={() => setChartOffset((prev) => Math.max(0, prev - 1))}
@@ -844,13 +876,35 @@ export function LogScreen() {
                 <Ionicons name="chevron-forward" size={16} color={chartOffset === 0 ? '#cbd5e1' : '#334155'} />
               </Pressable>
             </View>
+            <View style={styles.row}>
+              <Pressable
+                style={[styles.rangeToggle, chartRange === 'day' && styles.rangeToggleActive]}
+                onPress={() => {
+                  setChartRange('day')
+                  setChartOffset(0)
+                  setSelectedDayData(null)
+                }}
+              >
+                <Text style={[styles.rangeToggleText, chartRange === 'day' && styles.rangeToggleTextActive]}>日別</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.rangeToggle, chartRange === 'month' && styles.rangeToggleActive]}
+                onPress={() => {
+                  setChartRange('month')
+                  setChartOffset(0)
+                  setSelectedDayData(null)
+                }}
+              >
+                <Text style={[styles.rangeToggleText, chartRange === 'month' && styles.rangeToggleTextActive]}>月別</Text>
+              </Pressable>
+            </View>
 
           </View>
           <View style={styles.chartArea}>
             <View style={styles.chartRow}>
               <View style={{ width: 44, paddingBottom: 0 }}>
                 <View style={{ minHeight: 130, justifyContent: 'flex-end' }}>
-                  <Text style={[styles.yAxisTitle, { position: 'absolute', top: -5, left: 0 }]}>時間</Text>
+                  <Text style={[styles.yAxisTitle, { position: 'absolute', top: -5, left: 0 }]}>分</Text>
                   <View style={{ height: 120, justifyContent: 'space-between' }}>
                     <Text style={[styles.yAxisLabel, { transform: [{ translateY: -6 }] }]}>{formatMinutes(maxChartMinutes)}</Text>
                     <Text style={[styles.yAxisLabel, { transform: [{ translateY: 0 }] }]}>{formatMinutes(Math.round(maxChartMinutes / 2))}</Text>
@@ -917,7 +971,7 @@ export function LogScreen() {
             {selectedDayData && (
               <View style={styles.chartDetailBox}>
                 <Text style={styles.chartDetailDate}>
-                  日付: {selectedDayData.date} / 合計: {formatMinutes(selectedDayData.totalMinutes)}
+                  期間: {selectedDayData.date} / 合計: {formatMinutes(selectedDayData.totalMinutes)}
                 </Text>
                 {Object.entries(selectedDayData.totals)
                   .filter(([, minutes]) => minutes > 0)
@@ -930,7 +984,7 @@ export function LogScreen() {
                         { color: subjectColorMap.get(subject) || '#0f172a' }
                       ]}
                     >
-                      {subject}：{formatMinutes(minutes)}
+                      {subject}: {formatMinutes(minutes)}
                     </Text>
                   ))}
               </View>
@@ -957,8 +1011,8 @@ export function LogScreen() {
                         onPress={() => {
                           setMaterialRangeType(option.value)
                           setDayOffset(0)
-                          setWeekOffset(option.value === 'week' ? 1 : 0)
-                          setMonthOffset(option.value === 'month' ? 1 : 0)
+                          setWeekOffset(0)
+                          setMonthOffset(0)
                           setShowRangeMenu(false)
                         }}
                       >
@@ -1050,7 +1104,7 @@ export function LogScreen() {
           <View style={styles.headerRow}>
             <View>
               <Text style={styles.sectionTitle}>学習記録の入力</Text>
-              <Text style={styles.sectionSubtitle}>今日や過去の学習内容をまとめて入力できます</Text>
+              <Text style={styles.sectionSubtitle}>今日までの学習をまとめて入力できます</Text>
             </View>
             <Pressable style={styles.plusButton} onPress={() => setShowManualInput((prev) => !prev)}>
               <Ionicons name={showManualInput ? 'remove' : 'add'} size={18} color="#334155" />
@@ -1130,24 +1184,166 @@ export function LogScreen() {
                       }
                       setShowManualDatePicker(false)
                     }}
+                    maximumDate={new Date(2100, 0, 1)}
+                    minimumDate={new Date(2000, 0, 1)}
                   />
                 )}
               </View>
 
 
               <Pressable style={styles.primaryButton} onPress={handleManualSubmit}>
-                <Text style={styles.primaryButtonText}>送信</Text>
+                <Text style={styles.primaryButtonText}>保存</Text>
               </Pressable>
             </>
           )}
+        </View>
+
+        {/* --- Study Log Edit Section --- */}
+        <View style={styles.card}>
+          <View style={styles.headerRow}>
+            <View>
+              <Text style={styles.sectionTitle}>学習記録の編集</Text>
+              <Text style={styles.sectionSubtitle}>記録した時間を編集・削除できます</Text>
+            </View>
+            <Pressable style={styles.plusButton} onPress={() => setShowEditLogs((prev) => !prev)}>
+              <Ionicons name={showEditLogs ? 'remove' : 'add'} size={18} color="#334155" />
+            </Pressable>
+          </View>
+          {showEditLogs && groupedEditLogs.length === 0 ? (
+            <Text style={styles.mutedText}>学習記録がありません</Text>
+          ) : showEditLogs ? (
+            groupedEditLogs.map((group) => {
+              const isEditing = editingLogIds.length > 0 && editingLogIds[0] === group.ids[0]
+              const displayName = group.reference_book_id
+                ? referenceBooks.find((b) => b.id === group.reference_book_id)?.name || group.subject
+                : group.subject
+              return (
+                <View key={group.ids.join(',')} style={styles.editLogRow}>
+                  {!isEditing ? (
+                    <View style={styles.editLogItem}>
+                      <View style={styles.editLogInfo}>
+                        <Text style={styles.editLogDate}>{group.studyDay}</Text>
+                        <Text style={styles.editLogSubject} numberOfLines={1}>{displayName}</Text>
+                        <Text style={styles.editLogMinutes}>{formatMinutes(group.study_minutes)}</Text>
+                      </View>
+                      <View style={styles.editLogActions}>
+                        <Pressable
+                          style={styles.editIconButton}
+                          onPress={() => startEditGroup(group)}
+                        >
+                          <Ionicons name="create-outline" size={18} color="#2563eb" />
+                        </Pressable>
+                        <Pressable
+                          style={styles.deleteIconButton}
+                          onPress={() => deleteGroup(group)}
+                        >
+                          <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.editLogForm}>
+                      <Text style={styles.editLogFormTitle}>記録を編集</Text>
+                      <Text style={styles.label}>教材</Text>
+                      <Pressable
+                        style={styles.selectTrigger}
+                        onPress={() => setShowEditBookModal((prev) => !prev)}
+                      >
+                        <Text style={styles.selectTriggerText}>
+                          {editBookId
+                            ? referenceBooks.find((b) => b.id === editBookId)?.name
+                            : editSubject || '教材を選択'}
+                        </Text>
+                        <Ionicons name="chevron-down" size={20} color="#64748b" />
+                      </Pressable>
+                      {showEditBookModal && (
+                        <View style={styles.inlineDropdown}>
+                          {referenceBooks.map((item) => (
+                            <Pressable
+                              key={item.id}
+                              style={styles.dropdownItem}
+                              onPress={() => {
+                                setEditBookId(item.id || null)
+                                setShowEditBookModal(false)
+                              }}
+                            >
+                              <Text
+                                style={[
+                                  styles.dropdownItemText,
+                                  editBookId === (item.id || null) && styles.dropdownItemTextSelected,
+                                ]}
+                              >
+                                {item.name}
+                              </Text>
+                              {editBookId === (item.id || null) && (
+                                <Ionicons name="checkmark" size={20} color="#2563eb" />
+                              )}
+                            </Pressable>
+                          ))}
+                        </View>
+                      )}
+                      <Text style={[styles.label, { marginTop: 8 }]}>学習時間（分）</Text>
+                      <View style={styles.editMinutesRow}>
+                        <TextInput
+                          style={[styles.input, styles.flex]}
+                          keyboardType="numeric"
+                          value={editMinutes}
+                          onChangeText={setEditMinutes}
+                          onFocus={retryKeyboardAwareUpdate}
+                          placeholder="60"
+                        />
+                        <Pressable
+                          style={styles.clearMinutesButton}
+                          onPress={() => setEditMinutes('')}
+                        >
+                          <Ionicons name="close-circle" size={20} color="#94a3b8" />
+                        </Pressable>
+                      </View>
+                      <Text style={[styles.label, { marginTop: 8 }]}>学習日</Text>
+                      <TouchableOpacity
+                        style={styles.input}
+                        onPress={() => setShowEditDatePicker(true)}
+                      >
+                        <Text>{formatDateInput(editDate)}</Text>
+                      </TouchableOpacity>
+                      {showEditDatePicker && (
+                        <DateTimePicker
+                          value={editDate}
+                          mode="date"
+                          locale="ja-JP"
+                          display={RNPlatform.OS === 'ios' ? 'inline' : 'calendar'}
+                          onChange={(event, selectedDate) => {
+                            if (selectedDate) {
+                              setEditDate(normalizePickerDate(selectedDate))
+                            }
+                            setShowEditDatePicker(false)
+                          }}
+                          maximumDate={new Date(2100, 0, 1)}
+                          minimumDate={new Date(2000, 0, 1)}
+                        />
+                      )}
+                      <View style={[styles.row, { marginTop: 12, gap: 8 }]}>
+                        <Pressable style={[styles.outlineButton, styles.flex]} onPress={cancelEditLog}>
+                          <Text style={styles.outlineButtonText}>キャンセル</Text>
+                        </Pressable>
+                        <Pressable style={[styles.primaryButton, styles.flex]} onPress={saveEditLog}>
+                          <Text style={styles.primaryButtonText}>保存</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )
+            })
+          ) : null}
         </View>
 
         {/* --- Home Screen Features (Merged) --- */}
         <View style={styles.divider} />
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>現在の目標達成状況</Text>
-          <Text style={styles.sectionSubtitle}>今日の頑張りをチェック！</Text>
+          <Text style={styles.sectionTitle}>現在の連続学習状況</Text>
+          <Text style={styles.sectionSubtitle}>今日の頑張りをチェック</Text>
 
           <View style={[styles.mascotRow, { marginTop: 16, marginBottom: 16 }]}>
             <View style={styles.mascotCircle}>
@@ -1157,10 +1353,10 @@ export function LogScreen() {
               <Text style={styles.balloonText}>{
                 (() => {
                   const streak = calculateStreak(studyLogs)
-                  if (streak.currentStreak >= 7) return '🔥 最高！連続学習が続いてるよ！'
-                  if (streak.currentStreak >= 3) return '💪 いい感じ！このペースを維持しよう！'
-                  if (streak.currentStreak >= 1) return '✨ 今日も学習できたね！'
-                  return '📚 今日からスタート！一緒に頑張ろう！'
+                  if (streak.currentStreak >= 7) return '最高の継続です。この調子で続けましょう。'
+                  if (streak.currentStreak >= 3) return 'いいペースです。継続できています。'
+                  if (streak.currentStreak >= 1) return '今日は学習できました。次も頑張りましょう。'
+                  return 'まずは今日からスタートしましょう。'
                 })()
               }</Text>
             </View>
@@ -1200,10 +1396,10 @@ export function LogScreen() {
             })()))} />
             <View style={styles.inlineRow}>
               <View style={styles.flex}>
-                <Text style={styles.smallLabel}>今日の目標を変更</Text>
+                <Text style={styles.smallLabel}>今日の目標を更新</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="目標(分)"
+                  placeholder="目標（分）"
                   keyboardType="numeric"
                   value={todayOverride}
                   onChangeText={setTodayOverride}
@@ -1244,10 +1440,10 @@ export function LogScreen() {
             })()))} />
             <View style={styles.inlineRow}>
               <View style={styles.flex}>
-                <Text style={styles.smallLabel}>今週の目標を変更</Text>
+                <Text style={styles.smallLabel}>今週の目標を更新</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="目標(分)"
+                  placeholder="目標（分）"
                   keyboardType="numeric"
                   value={weekOverride}
                   onChangeText={setWeekOverride}
@@ -1294,10 +1490,10 @@ export function LogScreen() {
             })()))} />
             <View style={styles.inlineRow}>
               <View style={styles.flex}>
-                <Text style={styles.smallLabel}>今月の目標を変更</Text>
+                <Text style={styles.smallLabel}>今月の目標を更新</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="目標(分)"
+                  placeholder="目標（分）"
                   keyboardType="numeric"
                   value={monthOverride}
                   onChangeText={setMonthOverride}
@@ -2153,7 +2349,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#2563eb',
   },
-  // 復習カードの修正
+  // レビューカード表示
   reviewCardsEmpty: {
     alignItems: 'center',
     paddingVertical: 32,
@@ -2238,5 +2434,72 @@ const styles = StyleSheet.create({
   },
   reviewCardContentInput: {
     minHeight: 140,
+  },
+  // Edit log styles
+  editLogRow: {
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    paddingTop: 10,
+    marginTop: 6,
+  },
+  editLogItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  editLogInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  editLogDate: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  editLogSubject: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  editLogMinutes: {
+    fontSize: 13,
+    color: '#2563eb',
+    fontWeight: '600',
+  },
+  editLogActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  editIconButton: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+  },
+  deleteIconButton: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#fef2f2',
+  },
+  editLogForm: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 12,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  editLogFormTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 8,
+  },
+  editMinutesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  clearMinutesButton: {
+    padding: 4,
   },
 })

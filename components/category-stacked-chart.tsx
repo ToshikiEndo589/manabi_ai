@@ -15,6 +15,13 @@ interface CategoryStackedChartProps {
   referenceBooks?: ReferenceBook[]
 }
 
+function resolveCategoryName(log: StudyLog, referenceBookNameById: Map<string, string>) {
+  if (log.reference_book_id) {
+    return referenceBookNameById.get(log.reference_book_id) || log.subject || ''
+  }
+  return log.subject || ''
+}
+
 const PERIOD_OPTIONS = [
   { label: '7日', type: 'week' as const },
   { label: '30日', type: 'month' as const },
@@ -25,32 +32,28 @@ export function CategoryStackedChart({ studyLogs, referenceBooks = [] }: Categor
   const [dateOffset, setDateOffset] = useState(0) // 日付のオフセット（クリックでシフト）
   const todayLabel = format(getTodayDate(), 'M/d')
 
-  const { chartData, categories, maxValue, weekdayMap } = useMemo(() => {
+  const { chartData, categories, weekdayMap } = useMemo(() => {
+    const referenceBookNameById = new Map(referenceBooks.map((book) => [book.id, book.name]))
+
     // 教材名の一覧を取得（reference_book_idがある場合はそのname、ない場合はsubject）
     const materialSet = new Set<string>()
     studyLogs.forEach((log) => {
-      if (log.reference_book_id) {
-        const book = referenceBooks.find((b) => b.id === log.reference_book_id)
-        if (book) {
-          materialSet.add(book.name)
-        } else if (log.subject) {
-          materialSet.add(log.subject)
-        }
-      } else if (log.subject) {
-        materialSet.add(log.subject)
+      const categoryName = resolveCategoryName(log, referenceBookNameById)
+      if (categoryName) {
+        materialSet.add(categoryName)
       }
     })
     const categoryList = Array.from(materialSet).sort()
 
     if (studyLogs.length === 0) {
-      return { chartData: [], categories: categoryList, maxValue: 0, weekdayMap: new Map<string, string>() }
+      return { chartData: [], categories: categoryList, weekdayMap: new Map<string, string>() }
     }
 
     const logDates = studyLogs.map((log) => getStudyDay(new Date(log.started_at)))
     const uniqueDates = Array.from(new Set(logDates)).sort()
 
     if (uniqueDates.length === 0) {
-      return { chartData: [], categories: categoryList, maxValue: 0, weekdayMap: new Map<string, string>() }
+      return { chartData: [], categories: categoryList, weekdayMap: new Map<string, string>() }
     }
 
     const today = getTodayDate() // 03:00-03:00の区切りで今日を取得
@@ -107,7 +110,7 @@ export function CategoryStackedChart({ studyLogs, referenceBooks = [] }: Categor
 
       categoryList.forEach((category) => {
         const categoryMinutes = dayLogs
-          .filter((log) => log.subject === category)
+          .filter((log) => resolveCategoryName(log, referenceBookNameById) === category)
           .reduce((sum, log) => sum + log.study_minutes, 0)
         // 0分の場合はキーを設定しない（バーを表示しない）
         if (categoryMinutes > 0) {
@@ -122,36 +125,14 @@ export function CategoryStackedChart({ studyLogs, referenceBooks = [] }: Categor
       currentDate.setHours(12, 0, 0, 0)
     }
 
-    // データの最大値を計算（0より大きい値のみ）
-    const allValues = result.flatMap((d) =>
-      categoryList.map((cat) => (d[cat] as number) || 0)
-    ).filter((v) => v > 0)
-    const maxValue = allValues.length > 0 ? Math.max(...allValues) : 0
-
     const weekdayMap = new Map<string, string>()
     result.forEach(({ date, fullDate }) => {
       const dateObj = new Date(`${fullDate}T12:00:00`)
       weekdayMap.set(date, format(dateObj, 'EEE', { locale: ja }))
     })
 
-    return { chartData: result, categories: categoryList, maxValue, weekdayMap }
-  }, [studyLogs, selectedPeriodType, dateOffset])
-
-  const WeekTick = ({ x, y, payload }: { x?: number; y?: number; payload?: { value?: string } }) => {
-    const label = payload?.value || ''
-    const weekday = weekdayMap.get(label) || ''
-    const isToday = label === todayLabel
-    const dateText = isToday ? '今日' : label
-    if (x === undefined || y === undefined) return null
-    return (
-      <g transform={`translate(${x},${y})`}>
-        <text textAnchor="middle" fill="#6b7280" fontSize={10}>
-          <tspan x="0" dy="0">{dateText}</tspan>
-          <tspan x="0" dy="12">{weekday}</tspan>
-        </text>
-      </g>
-    )
-  }
+    return { chartData: result, categories: categoryList, weekdayMap }
+  }, [studyLogs, referenceBooks, selectedPeriodType, dateOffset])
 
   // 期間ラベルを生成
   const getPeriodLabel = (): string => {
@@ -285,16 +266,17 @@ export function CategoryStackedChart({ studyLogs, referenceBooks = [] }: Categor
               dataKey="date"
               axisLine={false}
               tickLine={false}
-              tick={selectedPeriodType === 'week' ? <WeekTick /> : { fontSize: 10, fill: '#6b7280' }}
-              tickFormatter={
-                selectedPeriodType === 'week'
-                  ? undefined
-                  : (label: string) => (label === todayLabel ? '今日' : label)
-              }
+              tick={{ fontSize: 10, fill: '#6b7280' }}
+              tickFormatter={(label: string) => {
+                const dateText = label === todayLabel ? '今日' : label
+                if (selectedPeriodType !== 'week') return dateText
+                const weekday = weekdayMap.get(label)
+                return weekday ? `${dateText}(${weekday})` : dateText
+              }}
               reversed
               angle={selectedPeriodType === 'month' ? -45 : 0}
               textAnchor={selectedPeriodType === 'month' ? 'end' : 'middle'}
-              height={selectedPeriodType === 'month' ? 60 : 36}
+              height={selectedPeriodType === 'month' ? 60 : 40}
               interval={selectedPeriodType === 'month' ? 2 : 0}
             />
             <YAxis

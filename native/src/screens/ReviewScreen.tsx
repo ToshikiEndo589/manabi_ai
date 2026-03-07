@@ -37,10 +37,6 @@ const INITIAL_CROP_RECT: CropRect = { x: 0.06, y: 0.12, width: 0.88, height: 0.6
 type CropRect = { x: number; y: number; width: number; height: number }
 type CropHandle = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight' | 'top' | 'bottom' | 'left' | 'right' | 'center' | null
 
-const DEFAULT_DIFFICULTY = 'normal'
-
-type Difficulty = 'easy' | 'normal' | 'hard'
-
 type QuizQuestion = {
     question: string
     choices: string[]
@@ -76,12 +72,12 @@ export function ReviewScreen() {
     const [completedThemesInTask, setCompletedThemesInTask] = useState<Record<string, string[]>>({})
     /** テーマごとの評価（全テーマ終了時に一番厳しい評価でSM-2を更新） */
     const [themeRatingsInTask, setThemeRatingsInTask] = useState<Record<string, SM2Rating>>({})
-    const [difficultyByTheme, setDifficultyByTheme] = useState<Record<string, Difficulty>>({})
     const [flashcardMode, setFlashcardMode] = useState<Record<string, boolean>>({})
     const [showingAnswer, setShowingAnswer] = useState<Record<string, boolean>>({})
     const [editingThemeKey, setEditingThemeKey] = useState<string | null>(null)
     const [editingThemeText, setEditingThemeText] = useState<string>('')
     const [loading, setLoading] = useState(true)
+    const [isGeneratingBulk, setIsGeneratingBulk] = useState(false)
     const [showFutureModal, setShowFutureModal] = useState(false)
     const [futureTasks, setFutureTasks] = useState<any[]>([])
     const [futureTasksLoading, setFutureTasksLoading] = useState(false)
@@ -105,6 +101,8 @@ export function ReviewScreen() {
     const [historyLoading, setHistoryLoading] = useState(false)
     const [historyTab, setHistoryTab] = useState<'ai' | 'flashcard'>('ai')
     const [historyErrorMessage, setHistoryErrorMessage] = useState<string | null>(null)
+    // フィルタータイプ: null=全件, 'incorrect'=不正解, 'fuzzy'=うろ覚え, 'both'=両方
+    const [historyFilter, setHistoryFilter] = useState<'incorrect' | 'fuzzy' | 'both' | null>(null)
     const [expandedHistoryGroups, setExpandedHistoryGroups] = useState<Record<string, boolean>>({})
     type QuizHistoryItem = {
         id: string
@@ -135,8 +133,19 @@ export function ReviewScreen() {
         sm2_ease_factor?: number | null
         sm2_repetitions?: number | null
     }
+    type ThemeQAHistoryItem = {
+        id: string
+        created_at: string
+        subject: string
+        theme: string
+        question: string
+        answer: string
+        reference_book_id: string | null
+        model: string | null
+    }
     const [quizHistory, setQuizHistory] = useState<QuizHistoryItem[]>([])
     const [flashcardHistory, setFlashcardHistory] = useState<FlashcardHistoryItem[]>([])
+    const [themeQaHistory, setThemeQaHistory] = useState<ThemeQAHistoryItem[]>([])
 
     // Book selection states
     const [referenceBooks, setReferenceBooks] = useState<ReferenceBook[]>([])
@@ -150,6 +159,20 @@ export function ReviewScreen() {
     const [aiNotes, setAiNotes] = useState<string[]>([''])
     type FlashcardItem = { question: string; answer: string }
     const [flashcards, setFlashcards] = useState<FlashcardItem[]>([{ question: '', answer: '' }])
+    type AskAIContext = {
+        taskId: string
+        reviewMaterialId: string | null
+        subject: string
+        theme: string
+        quizQuestion: string
+        explanation: string
+        referenceBookId: string | null
+    }
+    const [showAskAIModal, setShowAskAIModal] = useState(false)
+    const [askAIContext, setAskAIContext] = useState<AskAIContext | null>(null)
+    const [askAIInput, setAskAIInput] = useState('')
+    const [askAIAnswer, setAskAIAnswer] = useState('')
+    const [askAILoading, setAskAILoading] = useState(false)
 
     const endpoint = useMemo(() => {
         const direct = process.env.EXPO_PUBLIC_QA_ENDPOINT
@@ -178,6 +201,15 @@ export function ReviewScreen() {
         return endpoint.replace(/\/api\/quiz$/, '/api/theme-from-image')
     }, [endpoint])
 
+    const themeQAEndpoint = useMemo(() => {
+        const direct = process.env.EXPO_PUBLIC_THEME_QA_ENDPOINT
+        if (direct) return direct
+        const base = process.env.EXPO_PUBLIC_API_BASE_URL
+        if (base) return `${base.replace(/\/$/, '')}/api/theme-qa`
+        if (!endpoint) return ''
+        return endpoint.replace(/\/api\/quiz$/, '/api/theme-qa')
+    }, [endpoint])
+
     const [photoThemeLoading, setPhotoThemeLoading] = useState(false)
     // 範囲選択（切り取り）モーダル
     const [showCropModal, setShowCropModal] = useState(false)
@@ -186,8 +218,6 @@ export function ReviewScreen() {
     const [cropImageHeight, setCropImageHeight] = useState(0)
     const [cropRect, setCropRect] = useState<CropRect>({ x: 0, y: 0, width: 1, height: 1 })
     const [cropContainerLayout, setCropContainerLayout] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
-    /** 範囲選択画面で「再撮影」時に同じソース（カメラ/ライブラリ）を開く用 */
-    const [cropPhotoSource, setCropPhotoSource] = useState<'camera' | 'library' | null>(null)
     const cropDragRef = useRef<{
         handle: CropHandle;
         start: CropRect;
@@ -531,6 +561,7 @@ export function ReviewScreen() {
         try {
             const quizList: QuizHistoryItem[] = []
             const flashList: FlashcardHistoryItem[] = []
+            const themeQaList: ThemeQAHistoryItem[] = []
             const errors: string[] = []
 
             try {
@@ -634,6 +665,32 @@ export function ReviewScreen() {
                 errors.push('単語帳履歴の取得に失敗しました。')
             }
 
+            try {
+                const { data: themeQAData, error: themeQAError } = await supabase
+                    .from('theme_qa_logs')
+                    .select('id, created_at, subject, theme, question, answer, reference_book_id, model')
+                    .eq('user_id', userId)
+                    .order('created_at', { ascending: false })
+                    .limit(300)
+
+                if (themeQAError) {
+                    errors.push('AI質問履歴の読み込みに失敗しました。')
+                } else if (themeQAData) {
+                    themeQaList.push(...(themeQAData as any[]).map((row: any) => ({
+                        id: row.id,
+                        created_at: typeof row.created_at === 'string' ? row.created_at : '',
+                        subject: typeof row.subject === 'string' ? row.subject : '未分類',
+                        theme: typeof row.theme === 'string' ? row.theme : '未分類',
+                        question: typeof row.question === 'string' ? row.question : '',
+                        answer: typeof row.answer === 'string' ? row.answer : '',
+                        reference_book_id: typeof row.reference_book_id === 'string' ? row.reference_book_id : null,
+                        model: typeof row.model === 'string' ? row.model : null,
+                    })))
+                }
+            } catch {
+                errors.push('AI質問履歴の読み込みに失敗しました。')
+            }
+
             const bookFilter = selectedSubjectKey?.startsWith('book:') ? selectedSubjectKey.slice(5) : null
             const subjectFilter = selectedSubjectKey?.startsWith('subject:')
                 ? selectedSubjectKey.replace(/^subject:/, '')
@@ -649,9 +706,15 @@ export function ReviewScreen() {
                 if (subjectFilter) return item.subject === subjectFilter
                 return true
             }
+            const filterThemeQA = (item: ThemeQAHistoryItem) => {
+                if (bookFilter) return item.reference_book_id === bookFilter
+                if (subjectFilter) return item.subject === subjectFilter
+                return true
+            }
 
             setQuizHistory(quizList.filter(filterQuiz))
             setFlashcardHistory(flashList.filter(filterFlash))
+            setThemeQaHistory(themeQaList.filter(filterThemeQA))
             setHistoryErrorMessage(errors.length > 0 ? errors.join('\n') : null)
         } finally {
             setHistoryLoading(false)
@@ -902,60 +965,14 @@ export function ReviewScreen() {
         throw new Error('画像サイズが大きすぎます。範囲を少し小さくして再度お試しください。')
     }
 
-    const handlePhotoToThemes = async (useCamera: boolean) => {
-        if (!themeFromImageEndpoint) {
-            Alert.alert('設定エラー', 'APIのURLが設定されていません。')
-            return
-        }
-        const permission = useCamera
-            ? await ImagePicker.requestCameraPermissionsAsync()
-            : await ImagePicker.requestMediaLibraryPermissionsAsync()
-        if (permission.status !== 'granted') {
-            Alert.alert('権限が必要です', useCamera ? 'カメラの許可をしてください。' : '写真へのアクセスを許可してください。')
-            return
-        }
-        const launch = useCamera
-            ? () => ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 })
-            : () => ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 })
-        const result = await launch()
-        if (result.canceled || !result.assets?.[0]?.uri) return
-        const uri = result.assets[0].uri
-        await new Promise<void>((resolve, reject) => {
-            Image.getSize(uri, (w, h) => {
-                setCropPhotoSource(useCamera ? 'camera' : 'library')
-                setCropImageUri(uri)
-                setCropImageWidth(w)
-                setCropImageHeight(h)
-                setCropRect(INITIAL_CROP_RECT)
-                setShowCropModal(true)
-                resolve()
-            }, reject)
-        }).catch(() => {
-            Alert.alert('エラー', '画像の読み込みに失敗しました。')
-        })
-    }
-
-    const submitCropAndExtractThemes = async () => {
-        if (!cropImageUri || !themeFromImageEndpoint) return
-        const { w: iw, h: ih } = cropImgSizeRef.current
-        const originX = Math.round(cropRect.x * iw)
-        const originY = Math.round(cropRect.y * ih)
-        const width = Math.round(cropRect.width * iw)
-        const height = Math.round(cropRect.height * ih)
-        if (width <= 0 || height <= 0) {
-            Alert.alert('エラー', '有効な範囲を選択してください。')
-            return
-        }
-        setShowCropModal(false)
-        setCropImageUri(null)
+    const extractThemesFromImage = async (
+        imageUri: string,
+        cropBox: { originX: number; originY: number; width: number; height: number }
+    ) => {
+        if (!themeFromImageEndpoint) return
         setPhotoThemeLoading(true)
         try {
-            const base64 = await buildCroppedBase64ForThemeExtraction(cropImageUri, {
-                originX,
-                originY,
-                width,
-                height,
-            })
+            const base64 = await buildCroppedBase64ForThemeExtraction(imageUri, cropBox)
             const res = await fetch(themeFromImageEndpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -987,13 +1004,21 @@ export function ReviewScreen() {
                 console.log('====================================\n')
             }
             const themes: string[] = Array.isArray(data.themes) ? data.themes : []
-            const slots = themes.slice(0, MAX_THEME_FROM_IMAGE).map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
-            // 抽出されたテーマがない場合は空の枠を1つだけ用意する
-            if (slots.length === 0) {
-                slots.push('')
-            }
-            // 空の要素でMAXまで埋める処理は削除（必要な分だけ表示する）
-            setAiNotes(slots)
+            const slots = themes
+                .slice(0, MAX_THEME_FROM_IMAGE)
+                .map((t) => (typeof t === 'string' ? t.trim() : '').replace(/^[-*・]\s*/, ''))
+                .filter(Boolean)
+            setAiNotes((prev) => {
+                const merged = prev.map((n) => n.trim()).filter(Boolean)
+                const existing = new Set(merged)
+                slots.forEach((slot) => {
+                    if (!existing.has(slot)) {
+                        merged.push(slot)
+                        existing.add(slot)
+                    }
+                })
+                return merged.length > 0 ? merged : ['']
+            })
             setCreateMode('ai')
         } catch (e) {
             const msg = e instanceof Error ? e.message : 'テーマの抽出に失敗しました'
@@ -1003,20 +1028,111 @@ export function ReviewScreen() {
         }
     }
 
-    const pickBookImage = async () => {
-        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
-        if (permission.status !== 'granted') {
-            Alert.alert('権限が必要です', '写真へのアクセスを許可してください。')
+    const getImageSize = (imageUri: string): Promise<{ width: number; height: number }> =>
+        new Promise((resolve, reject) => {
+            Image.getSize(
+                imageUri,
+                (width, height) => resolve({ width, height }),
+                reject
+            )
+        })
+
+    const handlePhotoToThemes = async (useCamera: boolean) => {
+        if (!themeFromImageEndpoint) {
+            Alert.alert('設定エラー', 'APIのURLが設定されていません。')
             return
         }
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images'],
-            allowsEditing: true, // Forces JPEG/PNG conversation
-            quality: 0.8,
+        const permission = useCamera
+            ? await ImagePicker.requestCameraPermissionsAsync()
+            : await ImagePicker.requestMediaLibraryPermissionsAsync()
+        if (permission.status !== 'granted') {
+            Alert.alert('権限が必要です', useCamera ? 'カメラの許可をしてください。' : '写真へのアクセスを許可してください。')
+            return
+        }
+        const launch = useCamera
+            ? () => ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 })
+            : () => ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 })
+        const result = await launch()
+        const asset = result.assets?.[0]
+        if (result.canceled || !asset?.uri) return
+
+        const size = asset.width && asset.height
+            ? { width: asset.width, height: asset.height }
+            : await getImageSize(asset.uri).catch(() => ({ width: 0, height: 0 }))
+
+        if (size.width <= 0 || size.height <= 0) {
+            Alert.alert('エラー', '画像の読み込みに失敗しました。')
+            return
+        }
+
+        setCropImageUri(asset.uri)
+        setCropImageWidth(Math.round(size.width))
+        setCropImageHeight(Math.round(size.height))
+        setCropRect(INITIAL_CROP_RECT)
+        setShowCropModal(true)
+    }
+
+    const submitCropAndExtractThemes = async () => {
+        if (!cropImageUri || !themeFromImageEndpoint) return
+        const { w: iw, h: ih } = cropImgSizeRef.current
+        const originX = Math.round(cropRect.x * iw)
+        const originY = Math.round(cropRect.y * ih)
+        const width = Math.round(cropRect.width * iw)
+        const height = Math.round(cropRect.height * ih)
+        if (width <= 0 || height <= 0) {
+            Alert.alert('エラー', '有効な範囲を選択してください。')
+            return
+        }
+        setShowCropModal(false)
+        setCropImageUri(null)
+        await extractThemesFromImage(cropImageUri, {
+            originX,
+            originY,
+            width,
+            height,
         })
-        if (!result.canceled && result.assets[0]?.uri) {
+    }
+
+    const pickBookImage = async (source: 'camera' | 'library') => {
+        const permission = source === 'camera'
+            ? await ImagePicker.requestCameraPermissionsAsync()
+            : await ImagePicker.requestMediaLibraryPermissionsAsync()
+        if (permission.status !== 'granted') {
+            Alert.alert(
+                '権限が必要です',
+                source === 'camera' ? 'カメラの許可をしてください。' : '写真へのアクセスを許可してください。'
+            )
+            return
+        }
+        const launch = source === 'camera'
+            ? () => ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 })
+            : () => ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 })
+        const result = await launch()
+        if (!result.canceled && result.assets?.[0]?.uri) {
             setNewBookImage(result.assets[0].uri)
         }
+    }
+
+    const openBookImageSourcePicker = () => {
+        Alert.alert(
+            '画像を設定',
+            '取得方法を選んでください。',
+            [
+                { text: 'キャンセル', style: 'cancel' },
+                {
+                    text: 'カメラで撮影',
+                    onPress: () => {
+                        void pickBookImage('camera')
+                    },
+                },
+                {
+                    text: 'ライブラリから選択',
+                    onPress: () => {
+                        void pickBookImage('library')
+                    },
+                },
+            ]
+        )
     }
 
     const handleAddBook = async () => {
@@ -1346,7 +1462,6 @@ export function ReviewScreen() {
             return next
         })
         setReviewTasks((prev) => prev.filter((t) => t.id !== taskId))
-        loadTasks()
         loadFutureTasks()
     }
 
@@ -1368,8 +1483,6 @@ export function ReviewScreen() {
             return false
         }
         const themeValue = theme || noteValue
-        const difficultyKey = getThemeKey(task.id, themeValue)
-        const difficulty = difficultyByTheme[difficultyKey] || DEFAULT_DIFFICULTY
         setQuizByTask((prev) => {
             const current = prev[task.id]?.themes || {}
             const existing = current[themeValue]
@@ -1393,7 +1506,7 @@ export function ReviewScreen() {
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ note: themeValue, count: 1, difficulty }),
+                body: JSON.stringify({ note: themeValue, count: 1 }),
                 signal: controller.signal,
             })
             clearTimeout(timeoutId)
@@ -1480,6 +1593,103 @@ export function ReviewScreen() {
                 Alert.alert('生成エラー', message)
             }
             return false
+        }
+    }
+
+
+    const openAskAIModalFromExplanation = (task: ReviewTask, theme: string, question: QuizQuestion) => {
+        const subject = task.study_logs?.subject?.trim() || '未分類'
+        setAskAIContext({
+            taskId: task.id,
+            reviewMaterialId: task.review_material_id || null,
+            subject,
+            theme,
+            quizQuestion: question.question || '',
+            explanation: question.explanation || '',
+            referenceBookId: task.study_logs?.reference_book_id || null,
+        })
+        setAskAIInput('')
+        setAskAIAnswer('')
+        setShowAskAIModal(true)
+    }
+
+    const closeAskAIModal = () => {
+        if (askAILoading) return
+        setShowAskAIModal(false)
+        setAskAIContext(null)
+        setAskAIInput('')
+        setAskAIAnswer('')
+    }
+
+    const handleSubmitAskAI = async () => {
+        const input = askAIInput.trim()
+        if (!askAIContext) {
+            Alert.alert('エラー', '質問対象が見つかりません。')
+            return
+        }
+        if (!input) {
+            Alert.alert('入力してください', 'AIに質問する内容を入力してください。')
+            return
+        }
+        if (!themeQAEndpoint) {
+            Alert.alert('設定エラー', 'AI質問用のAPIエンドポイントが未設定です。')
+            return
+        }
+
+        setAskAILoading(true)
+        try {
+            const response = await fetch(themeQAEndpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    subject: askAIContext.subject,
+                    theme: askAIContext.theme,
+                    quizQuestion: askAIContext.quizQuestion,
+                    explanation: askAIContext.explanation,
+                    question: input,
+                }),
+            })
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}))
+                const message = errorData.details || errorData.error || 'AIへの質問に失敗しました。'
+                throw new Error(message)
+            }
+
+            const data = await response.json()
+            const answerText = typeof data?.answer === 'string' ? data.answer.trim() : ''
+            if (!answerText) {
+                throw new Error('AIの回答が空でした。')
+            }
+
+            setAskAIAnswer(answerText)
+
+            const { data: inserted, error: insertError } = await supabase
+                .from('theme_qa_logs')
+                .insert({
+                    user_id: userId,
+                    review_task_id: askAIContext.taskId,
+                    review_material_id: askAIContext.reviewMaterialId,
+                    reference_book_id: askAIContext.referenceBookId,
+                    subject: askAIContext.subject,
+                    theme: askAIContext.theme,
+                    question: input,
+                    answer: answerText,
+                    model: 'gpt-5-mini',
+                })
+                .select('id, created_at, subject, theme, question, answer, reference_book_id, model')
+                .single()
+
+            if (insertError) {
+                console.warn('theme_qa_logs insert failed:', insertError.message)
+            } else if (inserted) {
+                setThemeQaHistory((prev) => [inserted as ThemeQAHistoryItem, ...prev])
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'AIへの質問に失敗しました。'
+            Alert.alert('エラー', message)
+        } finally {
+            setAskAILoading(false)
         }
     }
 
@@ -1622,6 +1832,49 @@ export function ReviewScreen() {
         })
 
         await handleGenerateQuiz(fakeTask, trimmed)
+    }
+
+    const handleGenerateFiveQuizzes = async () => {
+        if (isGeneratingBulk) return
+        if (!selectedSubjectKey) {
+            Alert.alert('AIクイズ', '復習カードを選択してください。')
+            return
+        }
+
+        setIsGeneratingBulk(true)
+        try {
+            const queue: { task: ReviewTask; theme: string }[] = []
+            currentTasks.forEach((task) => {
+                let themes = splitThemes(task.study_logs?.note || '')
+                if (themes.length === 0) themes = [task.study_logs?.note?.trim() || '']
+                themes.forEach((theme) => {
+                    const trimmed = theme.trim()
+                    if (!trimmed) return
+                    if (queue.length >= 5) return
+                    const themeKey = getThemeKey(task.id, trimmed)
+                    const existingQuiz = quizByTask[task.id]?.themes?.[trimmed]
+                    const isFlashcard = flashcardMode[themeKey]
+                    if (!existingQuiz && !isFlashcard) {
+                        queue.push({ task, theme: trimmed })
+                    }
+                })
+            })
+
+            if (queue.length === 0) {
+                Alert.alert('AIクイズ', '新しく作成できるテーマがありません。')
+                return
+            }
+
+            for (const item of queue) {
+                await handleGenerateQuiz(item.task, item.theme)
+            }
+            Alert.alert('AIクイズ', `${queue.length}件のテーマでクイズを作成しました。`)
+        } catch (error) {
+            console.error('handleGenerateFiveQuizzes error', error)
+            Alert.alert('エラー', 'AIクイズの一括作成に失敗しました。通信環境をご確認ください。')
+        } finally {
+            setIsGeneratingBulk(false)
+        }
     }
 
     const handleCreate = async () => {
@@ -1877,12 +2130,20 @@ export function ReviewScreen() {
             selected_index: number
             correct_index: number
         }
+        type TrendQA = {
+            id: string
+            created_at: string
+            question: string
+            answer: string
+            model: string | null
+        }
         type TrendGroup = {
             key: string
             subject: string
             theme: string
             latestCreatedAt: string
             attempts: TrendAttempt[]
+            qaLogs: TrendQA[]
             sm2_interval: number | null
             sm2_ease_factor: number | null
             sm2_repetitions: number | null
@@ -1905,6 +2166,7 @@ export function ReviewScreen() {
                     theme,
                     latestCreatedAt: item.created_at,
                     attempts: [],
+                    qaLogs: [],
                     sm2_interval: item.sm2_interval ?? null,
                     sm2_ease_factor: item.sm2_ease_factor ?? null,
                     sm2_repetitions: item.sm2_repetitions ?? null,
@@ -1932,12 +2194,46 @@ export function ReviewScreen() {
             })
         })
 
+        themeQaHistory.forEach((item) => {
+            const subject = (item.subject || '未分類').trim() || '未分類'
+            const theme = (item.theme || '未分類').trim() || '未分類'
+            const key = `${subject}\n${theme}`
+
+            if (!groups[key]) {
+                groups[key] = {
+                    key,
+                    subject,
+                    theme,
+                    latestCreatedAt: item.created_at,
+                    attempts: [],
+                    qaLogs: [],
+                    sm2_interval: null,
+                    sm2_ease_factor: null,
+                    sm2_repetitions: null,
+                }
+            }
+
+            const current = groups[key]
+            if (toMillis(item.created_at) > toMillis(current.latestCreatedAt)) {
+                current.latestCreatedAt = item.created_at
+            }
+            current.qaLogs.push({
+                id: item.id,
+                created_at: item.created_at,
+                question: item.question,
+                answer: item.answer,
+                model: item.model ?? null,
+            })
+        })
+
         const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 
         return Object.values(groups)
             .map((group) => {
                 const attempts = [...group.attempts].sort((a, b) => toMillis(a.created_at) - toMillis(b.created_at))
                 const latestAttempt = attempts[attempts.length - 1] ?? null
+                const qaLogs = [...group.qaLogs].sort((a, b) => toMillis(a.created_at) - toMillis(b.created_at))
+                const latestQaLog = qaLogs[qaLogs.length - 1] ?? null
                 const correctCount = attempts.filter((a) => a.is_correct).length
                 const recentCorrectRatio = attempts.length > 0 ? correctCount / attempts.length : 0
 
@@ -1996,6 +2292,8 @@ export function ReviewScreen() {
                     ...group,
                     attempts,
                     latestAttempt,
+                    qaLogs,
+                    latestQaLog,
                     retentionScore,
                     retentionLabel,
                     retentionColor,
@@ -2003,7 +2301,7 @@ export function ReviewScreen() {
                 }
             })
             .sort((a, b) => toMillis(b.latestCreatedAt) - toMillis(a.latestCreatedAt))
-    }, [quizHistory])
+    }, [quizHistory, themeQaHistory])
 
     const groupedFlashcardHistory = useMemo(() => {
         type FlashcardTrendAttempt = {
@@ -2137,6 +2435,30 @@ export function ReviewScreen() {
             .sort((a, b) => toMillis(b.latestCreatedAt) - toMillis(a.latestCreatedAt))
     }, [flashcardHistory])
 
+    const filteredQuizHistory = useMemo(() => {
+        if (!historyFilter) return groupedQuizHistory
+        return groupedQuizHistory.filter((group) => {
+            const hasIncorrect = group.attempts.some((a) => !a.is_correct)
+            const hasFuzzy = group.attempts.some((a) => a.is_correct && a.rating === 'good')
+            if (historyFilter === 'incorrect') return hasIncorrect
+            if (historyFilter === 'fuzzy') return hasFuzzy
+            if (historyFilter === 'both') return hasIncorrect || hasFuzzy
+            return true
+        })
+    }, [groupedQuizHistory, historyFilter])
+
+    const filteredFlashcardHistory = useMemo(() => {
+        if (!historyFilter) return groupedFlashcardHistory
+        return groupedFlashcardHistory.filter((group) => {
+            const hasIncorrect = group.attempts.some((a) => a.rating === 'hard')
+            const hasFuzzy = group.attempts.some((a) => a.rating === 'good')
+            if (historyFilter === 'incorrect') return hasIncorrect
+            if (historyFilter === 'fuzzy') return hasFuzzy
+            if (historyFilter === 'both') return hasIncorrect || hasFuzzy
+            return true
+        })
+    }, [groupedFlashcardHistory, historyFilter])
+
     // フラッシュカード形式のテーマを自動的にflashcardModeへ
     useEffect(() => {
         const updates: Record<string, boolean> = {}
@@ -2194,7 +2516,7 @@ export function ReviewScreen() {
                             <Text style={styles.futureButtonText}>履歴</Text>
                         </Pressable>
                         <Pressable
-                            style={styles.createButton}
+                            style={[styles.futureButton, { backgroundColor: '#2563eb', borderColor: '#2563eb' }]}
                             onPress={() => {
                                 if (selectedSubjectKey?.startsWith('book:')) {
                                     const bookId = selectedSubjectKey.slice(5)
@@ -2206,8 +2528,8 @@ export function ReviewScreen() {
                                 setShowCreateModal(true)
                             }}
                         >
-                            <Ionicons name="add-circle" size={20} color="#ffffff" />
-                            <Text style={styles.createButtonText}>追加</Text>
+                            <Ionicons name="add-circle" size={18} color="#ffffff" />
+                            <Text style={[styles.futureButtonText, { color: '#ffffff' }]}>作成</Text>
                         </Pressable>
                     </View>
                 </View>
@@ -2268,6 +2590,21 @@ export function ReviewScreen() {
                         ) : (
                             <View>
 
+                                {currentTasks.length > 0 && (
+                                    <Pressable
+                                        style={[styles.bulkQuizButton, isGeneratingBulk && { opacity: 0.75 }]}
+                                        onPress={handleGenerateFiveQuizzes}
+                                        disabled={isGeneratingBulk}
+                                    >
+                                        <View style={styles.bulkQuizIconWrap}>
+                                            <Ionicons name="sparkles-outline" size={18} color="#7c3aed" />
+                                        </View>
+                                        <Text style={styles.bulkQuizText}>
+                                            {isGeneratingBulk ? '作成中...' : 'AIクイズを5テーマ分作成'}
+                                        </Text>
+                                    </Pressable>
+                                )}
+
                                 {currentTasks.map((task) => {
                                     const quiz = quizByTask[task.id]
                                     let themes = splitThemes(task.study_logs?.note || '')
@@ -2283,7 +2620,6 @@ export function ReviewScreen() {
                                             {visibleThemes.map((theme, index) => {
                                                 const themeQuiz = quiz?.themes?.[theme]
                                                 const themeKey = getThemeKey(task.id, theme)
-                                                const selectedDifficulty = difficultyByTheme[themeKey] || DEFAULT_DIFFICULTY
                                                 return (
                                                     <View key={`${task.id}-${index}`} style={styles.themeCard}>
                                                         <View style={styles.themeHeader}>
@@ -2300,37 +2636,7 @@ export function ReviewScreen() {
                                                         {!parseFlashcard(theme).answer && (
                                                             <View style={styles.themeBadge}>
                                                                 <Ionicons name="pricetag-outline" size={12} color="#475569" />
-                                                                <Text style={styles.themeBadgeText} numberOfLines={1}>{theme}</Text>
-                                                            </View>
-                                                        )}
-                                                        {!parseFlashcard(theme).answer && (
-                                                            <View style={styles.difficultyRow}>
-                                                                <Text style={styles.difficultyLabel}>難易度</Text>
-                                                                {[
-                                                                    { key: 'easy' as Difficulty, label: '易しい' },
-                                                                    { key: 'normal' as Difficulty, label: '普通' },
-                                                                    { key: 'hard' as Difficulty, label: '難しい' },
-                                                                ].map((item) => (
-                                                                    <Pressable
-                                                                        key={item.key}
-                                                                        style={[
-                                                                            styles.difficultyButton,
-                                                                            selectedDifficulty === item.key && styles.difficultyButtonActive,
-                                                                        ]}
-                                                                        onPress={() =>
-                                                                            setDifficultyByTheme((prev) => ({ ...prev, [themeKey]: item.key }))
-                                                                        }
-                                                                    >
-                                                                        <Text
-                                                                            style={[
-                                                                                styles.difficultyText,
-                                                                                selectedDifficulty === item.key && styles.difficultyTextActive,
-                                                                            ]}
-                                                                        >
-                                                                            {item.label}
-                                                                        </Text>
-                                                                    </Pressable>
-                                                                ))}
+                                                                <Text style={styles.themeBadgeText}>{theme}</Text>
                                                             </View>
                                                         )}
 
@@ -2486,9 +2792,21 @@ export function ReviewScreen() {
                                                                                         正解: {q.correct_index + 1}番
                                                                                     </Text>
                                                                                     {q.explanation && (
-                                                                                        <Text style={styles.explanationText}>
-                                                                                            {q.explanation}
-                                                                                        </Text>
+                                                                                        <>
+                                                                                            <Text style={styles.explanationText}>
+                                                                                                {q.explanation}
+                                                                                            </Text>
+                                                                                            <Pressable
+                                                                                                style={[styles.outlineButton, styles.askAIButtonInline, askAILoading && { opacity: 0.6 }]}
+                                                                                                onPress={() => openAskAIModalFromExplanation(task, theme, q)}
+                                                                                                disabled={askAILoading}
+                                                                                            >
+                                                                                                <Ionicons name="chatbubble-ellipses-outline" size={16} color="#7c3aed" />
+                                                                                                <Text style={[styles.outlineButtonText, styles.askAIButtonInlineText]}>
+                                                                                                    AIに質問
+                                                                                                </Text>
+                                                                                            </Pressable>
+                                                                                        </>
                                                                                     )}
                                                                                     {(() => {
                                                                                         const isAllAnswered = themeQuiz.questions.every((_, i) => themeQuiz.answers[i] !== undefined)
@@ -2568,6 +2886,70 @@ export function ReviewScreen() {
             </View>
 
             {/* 明日以降の復習予定モーダル */}
+            <Modal
+                visible={showAskAIModal}
+                animationType="slide"
+                transparent
+                onRequestClose={closeAskAIModal}
+            >
+                <KeyboardAvoidingView
+                    style={styles.askAIModalOverlay}
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                >
+                    <View style={styles.askAIModalCard}>
+                        <View style={styles.askAIModalHeader}>
+                            <Text style={styles.askAIModalTitle}>AIに質問（gpt-5-mini）</Text>
+                            <Pressable onPress={closeAskAIModal} disabled={askAILoading} hitSlop={10}>
+                                <Ionicons name="close" size={22} color="#64748b" />
+                            </Pressable>
+                        </View>
+                        <Text style={styles.askAIModalThemeText}>
+                            {askAIContext ? `${askAIContext.subject} / ${askAIContext.theme}` : ''}
+                        </Text>
+
+                        <Text style={styles.askAIModalLabel}>質問内容</Text>
+                        <TextInput
+                            style={styles.askAIModalInput}
+                            value={askAIInput}
+                            onChangeText={setAskAIInput}
+                            multiline
+                            placeholder="この解説のここが分からない、などを入力"
+                            textAlignVertical="top"
+                            editable={!askAILoading}
+                        />
+
+                        <View style={styles.askAIModalActions}>
+                            <Pressable style={styles.askAISecondaryButton} onPress={closeAskAIModal} disabled={askAILoading}>
+                                <Text style={styles.askAISecondaryButtonText}>閉じる</Text>
+                            </Pressable>
+                            <Pressable
+                                style={[styles.askAIPrimaryButton, askAILoading && { opacity: 0.7 }]}
+                                onPress={handleSubmitAskAI}
+                                disabled={askAILoading}
+                            >
+                                <Text style={styles.askAIPrimaryButtonText}>
+                                    {askAILoading ? '質問中...' : 'AIに質問'}
+                                </Text>
+                            </Pressable>
+                        </View>
+
+                        {askAILoading && (
+                            <View style={styles.askAILoadingWrap}>
+                                <ActivityIndicator size="small" color="#7c3aed" />
+                            </View>
+                        )}
+
+                        {askAIAnswer ? (
+                            <View style={styles.askAIAnswerCard}>
+                                <Text style={styles.askAIAnswerLabel}>AIの回答</Text>
+                                <Text style={styles.askAIAnswerText}>{askAIAnswer}</Text>
+                                <Text style={styles.askAIAnswerHint}>この質問と回答はテーマ履歴に保存されます。</Text>
+                            </View>
+                        ) : null}
+                    </View>
+                </KeyboardAvoidingView>
+            </Modal>
+
             <Modal
                 visible={showFutureModal}
                 animationType="slide"
@@ -2669,6 +3051,26 @@ export function ReviewScreen() {
                             </Pressable>
                         </View>
 
+                        {/* フィルターバー */}
+                        <View style={styles.historyFilterBar}>
+                            {([
+                                { key: null, label: 'すべて', icon: 'list-outline' },
+                                { key: 'incorrect', label: '不正解', icon: 'close-circle-outline' },
+                                { key: 'fuzzy', label: 'うろ覚え', icon: 'help-circle-outline' },
+                            ] as const).map(({ key, label, icon }) => (
+                                <Pressable
+                                    key={String(key)}
+                                    style={[styles.historyFilterChip, historyFilter === key && styles.historyFilterChipActive]}
+                                    onPress={() => setHistoryFilter(key as any)}
+                                >
+                                    <Ionicons name={icon as any} size={14} color={historyFilter === key ? '#ffffff' : '#64748b'} />
+                                    <Text style={[styles.historyFilterChipText, historyFilter === key && styles.historyFilterChipTextActive]}>
+                                        {label}
+                                    </Text>
+                                </Pressable>
+                            ))}
+                        </View>
+
                         <View>
                             {historyErrorMessage && (
                                 <View style={styles.historyPremiumErrorBox}>
@@ -2681,7 +3083,7 @@ export function ReviewScreen() {
                                     <ActivityIndicator size="large" color="#10b981" />
                                 </View>
                             ) : historyTab === 'ai' ? (
-                                groupedQuizHistory.length === 0 ? (
+                                filteredQuizHistory.length === 0 ? (
                                     <View style={styles.historyPremiumEmptyState}>
                                         <View style={styles.historyPremiumEmptyIconWrap}>
                                             <Ionicons name="document-text-outline" size={52} color="#cbd5e1" />
@@ -2690,7 +3092,7 @@ export function ReviewScreen() {
                                         <Text style={styles.historyPremiumEmptySubtext}>クイズを解くとここに表示されます</Text>
                                     </View>
                                 ) : (
-                                    groupedQuizHistory.map((group) => (
+                                    filteredQuizHistory.map((group) => (
                                         <View key={group.key} style={styles.historyPremiumCard}>
                                             <View style={styles.historyPremiumCardHeader}>
                                                 <Text style={styles.historyPremiumDate}>{formatHistoryDate(group.latestCreatedAt)}</Text>
@@ -2758,7 +3160,7 @@ export function ReviewScreen() {
                                                 })}
                                             </ScrollView>
 
-                                            {group.attempts.length > 0 && (
+                                            {(group.attempts.length > 0 || group.qaLogs.length > 0) && (
                                                 <View style={styles.historyPremiumExplanationBox}>
                                                     {/* 最新の試行をデフォルト表示 */}
                                                     <Text style={styles.historyPremiumExplanationLabel}>直近の問題</Text>
@@ -2793,6 +3195,21 @@ export function ReviewScreen() {
                                                             <Text style={[styles.historyPremiumExplanationLabel, { marginTop: 12 }]}>直近の解説</Text>
                                                             <Text style={styles.historyPremiumExplanationText}>{group.latestAttempt.explanation}</Text>
                                                         </>
+                                                    )}
+
+                                                    {group.qaLogs.length > 0 && (
+                                                        <View style={styles.historyQASection}>
+                                                            <Text style={[styles.historyPremiumExplanationLabel, { marginTop: 12 }]}>AI質問履歴</Text>
+                                                            {[...group.qaLogs].reverse().map((qaLog) => (
+                                                                <View key={qaLog.id} style={styles.historyQAItem}>
+                                                                    <Text style={styles.historyQAMeta}>
+                                                                        {formatHistoryDate(qaLog.created_at)} {qaLog.model ? `(${qaLog.model})` : ''}
+                                                                    </Text>
+                                                                    <Text style={styles.historyQAQuestion}>Q. {qaLog.question}</Text>
+                                                                    <Text style={styles.historyQAAnswer}>A. {qaLog.answer}</Text>
+                                                                </View>
+                                                            ))}
+                                                        </View>
                                                     )}
 
                                                     {group.attempts.length > 1 && (
@@ -2862,7 +3279,7 @@ export function ReviewScreen() {
                                     ))
                                 )
                             ) : (
-                                groupedFlashcardHistory.length === 0 ? (
+                                filteredFlashcardHistory.length === 0 ? (
                                     <View style={styles.historyPremiumEmptyState}>
                                         <View style={styles.historyPremiumEmptyIconWrap}>
                                             <Ionicons name="albums-outline" size={52} color="#cbd5e1" />
@@ -2871,7 +3288,7 @@ export function ReviewScreen() {
                                         <Text style={styles.historyPremiumEmptySubtext}>単語帳を学習するとここに表示されます</Text>
                                     </View>
                                 ) : (
-                                    groupedFlashcardHistory.map((group) => {
+                                    filteredFlashcardHistory.map((group) => {
                                         const { question, answer } = parseFlashcard(group.content)
                                         return (
                                             <View key={group.key} style={styles.historyPremiumCard}>
@@ -3274,11 +3691,11 @@ export function ReviewScreen() {
                                                         onFocus={() => retryKeyboardAwareUpdate(createModalKeyboardRef)}
                                                     />
                                                     <Text style={styles.inputLabel}>画像（任意）</Text>
-                                                    <Pressable style={styles.imageSelectButton} onPress={pickBookImage}>
+                                                    <Pressable style={styles.imageSelectButton} onPress={openBookImageSourcePicker}>
                                                         {newBookImage ? (
                                                             <Image source={{ uri: newBookImage }} style={{ width: 100, height: 100, borderRadius: 8 }} />
                                                         ) : (
-                                                            <Text style={styles.imageSelectText}>画像を選択</Text>
+                                                            <Text style={styles.imageSelectText}>画像を選択 / 撮影</Text>
                                                         )}
                                                     </Pressable>
                                                     <View style={styles.modalActions}>
@@ -3598,6 +4015,19 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         fontSize: 12,
     },
+    askAIButtonInline: {
+        marginTop: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        borderColor: '#d8b4fe',
+        backgroundColor: '#f5f3ff',
+    },
+    askAIButtonInlineText: {
+        color: '#7c3aed',
+        fontWeight: '700',
+    },
 
     photoThemeButton: {
         flexDirection: 'row',
@@ -3653,6 +4083,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         alignSelf: 'flex-start',
+        maxWidth: '100%',
         backgroundColor: '#f1f5f9',
         paddingHorizontal: 8,
         paddingVertical: 6,
@@ -3665,6 +4096,7 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '700',
         color: '#475569',
+        flexShrink: 1,
     },
     themeHeader: {
         flexDirection: 'row',
@@ -3675,43 +4107,6 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '800',
         color: '#0f172a',
-    },
-    difficultyRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        flexWrap: 'wrap',
-    },
-    difficultyLabel: {
-        fontSize: 12,
-        color: '#64748b',
-        marginRight: 4,
-        fontWeight: '600',
-    },
-    difficultyButton: {
-        borderWidth: 1,
-        borderColor: '#e2e8f0',
-        borderRadius: 12,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        backgroundColor: '#f8fafc',
-    },
-    difficultyButtonActive: {
-        borderColor: '#2563eb',
-        backgroundColor: '#2563eb',
-        shadowColor: '#2563eb',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    difficultyText: {
-        fontSize: 11,
-        color: '#334155',
-        fontWeight: '600',
-    },
-    difficultyTextActive: {
-        color: '#ffffff',
     },
     quizBlock: {
         gap: 10,
@@ -4234,6 +4629,108 @@ const styles = StyleSheet.create({
         marginTop: 8,
         lineHeight: 20,
     },
+    askAIModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(15, 23, 42, 0.5)',
+        justifyContent: 'center',
+        padding: 16,
+    },
+    askAIModalCard: {
+        backgroundColor: '#ffffff',
+        borderRadius: 16,
+        padding: 16,
+        maxHeight: '86%',
+    },
+    askAIModalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 6,
+    },
+    askAIModalTitle: {
+        fontSize: 17,
+        fontWeight: '800',
+        color: '#1e293b',
+    },
+    askAIModalThemeText: {
+        fontSize: 12,
+        color: '#64748b',
+        marginBottom: 12,
+    },
+    askAIModalLabel: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#475569',
+        marginBottom: 6,
+    },
+    askAIModalInput: {
+        minHeight: 100,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        borderRadius: 12,
+        padding: 10,
+        fontSize: 14,
+        color: '#0f172a',
+        backgroundColor: '#f8fafc',
+    },
+    askAIModalActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        gap: 8,
+        marginTop: 12,
+    },
+    askAISecondaryButton: {
+        backgroundColor: '#f1f5f9',
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        borderRadius: 10,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+    },
+    askAISecondaryButtonText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#475569',
+    },
+    askAIPrimaryButton: {
+        backgroundColor: '#7c3aed',
+        borderRadius: 10,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+    },
+    askAIPrimaryButtonText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#ffffff',
+    },
+    askAILoadingWrap: {
+        alignItems: 'center',
+        marginTop: 10,
+    },
+    askAIAnswerCard: {
+        marginTop: 12,
+        backgroundColor: '#f8fafc',
+        borderRadius: 10,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+    },
+    askAIAnswerLabel: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#64748b',
+        marginBottom: 6,
+    },
+    askAIAnswerText: {
+        fontSize: 14,
+        color: '#1e293b',
+        lineHeight: 20,
+    },
+    askAIAnswerHint: {
+        fontSize: 11,
+        color: '#64748b',
+        marginTop: 8,
+    },
     subjectList: {
         gap: 12,
         marginTop: 12,
@@ -4572,7 +5069,6 @@ const styles = StyleSheet.create({
     headerButtons: {
         flexDirection: 'row',
         alignItems: 'center',
-        flexWrap: 'wrap',
         gap: 8,
     },
     contentButton: {
@@ -4605,6 +5101,29 @@ const styles = StyleSheet.create({
     futureButtonText: {
         color: '#2563eb',
         fontSize: 13,
+        fontWeight: '700',
+    },
+    bulkQuizButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 14,
+        borderWidth: 1.5,
+        borderColor: '#7c3aed',
+        backgroundColor: '#f5f3ff',
+        marginBottom: 12,
+    },
+    bulkQuizIconWrap: {
+        backgroundColor: '#ede9fe',
+        padding: 6,
+        borderRadius: 10,
+    },
+    bulkQuizText: {
+        color: '#5b21b6',
+        fontSize: 14,
         fontWeight: '700',
     },
     contentModalRoot: {
@@ -5209,6 +5728,34 @@ const styles = StyleSheet.create({
         color: '#334155',
         lineHeight: 20,
     },
+    historyQASection: {
+        marginTop: 4,
+        gap: 8,
+    },
+    historyQAItem: {
+        backgroundColor: '#ffffff',
+        borderRadius: 8,
+        padding: 10,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+    },
+    historyQAMeta: {
+        fontSize: 11,
+        color: '#64748b',
+        marginBottom: 6,
+    },
+    historyQAQuestion: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#1e293b',
+        lineHeight: 19,
+    },
+    historyQAAnswer: {
+        fontSize: 13,
+        color: '#334155',
+        lineHeight: 19,
+        marginTop: 4,
+    },
     // Flashcard styles
     historyPremiumFlashcardQA: {
         backgroundColor: '#ffffff',
@@ -5335,5 +5882,35 @@ const styles = StyleSheet.create({
         fontSize: 11,
         color: '#94a3b8',
         marginTop: 3,
+    },
+    historyFilterBar: {
+        flexDirection: 'row',
+        gap: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        flexWrap: 'wrap',
+    },
+    historyFilterChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingVertical: 6,
+        paddingHorizontal: 12,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        backgroundColor: '#f8fafc',
+    },
+    historyFilterChipActive: {
+        backgroundColor: '#2563eb',
+        borderColor: '#2563eb',
+    },
+    historyFilterChipText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#64748b',
+    },
+    historyFilterChipTextActive: {
+        color: '#ffffff',
     },
 })

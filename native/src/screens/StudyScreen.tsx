@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Image,
@@ -19,8 +19,6 @@ import { useProfile } from '../contexts/ProfileContext'
 import type { ReferenceBook } from '../types'
 import { formatTimer } from '../lib/format'
 import { getTodayStart } from '../lib/date'
-
-const REVIEW_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 365, 730]
 
 export function StudyScreen() {
   const { userId } = useProfile()
@@ -44,23 +42,50 @@ export function StudyScreen() {
     [referenceBooks, selectedBookId]
   )
 
-  const loadBooks = async () => {
-    setLoading(true)
+  const fetchBooks = useCallback(async () => {
+    if (!userId) {
+      return [] as ReferenceBook[]
+    }
+
     const { data, error } = await supabase
       .from('reference_books')
       .select('*')
       .eq('user_id', userId)
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
-    if (!error) {
-      setReferenceBooks((data || []) as ReferenceBook[])
+
+    if (error) {
+      return [] as ReferenceBook[]
     }
+
+    return (data || []) as ReferenceBook[]
+  }, [userId])
+
+  const loadBooks = useCallback(async () => {
+    setLoading(true)
+    const books = await fetchBooks()
+    setReferenceBooks(books)
     setLoading(false)
-  }
+  }, [fetchBooks])
 
   useEffect(() => {
-    loadBooks()
-  }, [userId])
+    let isActive = true
+
+    const initialize = async () => {
+      setLoading(true)
+      const books = await fetchBooks()
+      if (!isActive) return
+
+      setReferenceBooks(books)
+      setLoading(false)
+    }
+
+    void initialize()
+
+    return () => {
+      isActive = false
+    }
+  }, [fetchBooks])
 
   // Timer update effect - calculate elapsed time from start time
   useEffect(() => {
@@ -179,6 +204,17 @@ export function StudyScreen() {
         Alert.alert('保存エラー', error.message)
         return
       }
+
+      // 教材名変更を関連テーブルの subject にも反映
+      await supabase
+        .from('review_materials')
+        .update({ subject: newBookName.trim() })
+        .eq('reference_book_id', editingBookId)
+
+      await supabase
+        .from('study_logs')
+        .update({ subject: newBookName.trim() })
+        .eq('reference_book_id', editingBookId)
 
       setReferenceBooks((prev) => prev.map(b => b.id === editingBookId ? (data as ReferenceBook) : b))
       setEditingBookId(null)

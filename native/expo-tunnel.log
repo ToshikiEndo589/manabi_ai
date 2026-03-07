@@ -1,0 +1,8 @@
+env: load .env
+env: export EXPO_PUBLIC_SUPABASE_URL EXPO_PUBLIC_SUPABASE_ANON_KEY EXPO_PUBLIC_API_BASE_URL
+Starting project at C:\Users\tsken\Downloads\AI-YOBIKOU-main (1)\AI-YOBIKOU-main\native
+Metro is running in CI mode, reloads are disabled. Remove CI=true to enable watch mode.
+Starting Metro Bundler
+warning: Bundler cache is empty, rebuilding (this may take a minute)
+CommandError: TypeError: Cannot read properties of undefined (reading 'body')
+Check the Ngrok status page for outages: https://status.ngrok.com/

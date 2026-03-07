@@ -1,7 +1,6 @@
 'use client'
 
 import Image from 'next/image'
-import { useEffect, useState } from 'react'
 
 interface MascotMessageProps {
   message: string
@@ -9,12 +8,6 @@ interface MascotMessageProps {
 }
 
 export function MascotMessage({ message, emotion = 'happy' }: MascotMessageProps) {
-  const [isVisible, setIsVisible] = useState(false)
-
-  useEffect(() => {
-    setIsVisible(true)
-  }, [message])
-
   const emotionClass = {
     happy: 'border-blue-300 bg-blue-50',
     encouraging: 'border-green-300 bg-green-50',
@@ -23,7 +16,7 @@ export function MascotMessage({ message, emotion = 'happy' }: MascotMessageProps
   }[emotion]
 
   return (
-    <div className={`flex items-start space-x-4 transition-all duration-300 ${isVisible ? 'opacity-100' : 'opacity-0'}`}>
+    <div key={message} className="flex items-start space-x-4 animate-in fade-in duration-300">
       <div className="relative w-20 h-20 flex-shrink-0 rounded-full overflow-hidden" style={{ background: 'linear-gradient(to bottom right, rgb(239 246 255), rgb(238 242 255))' }}>
         <Image
           src="/images/mascot.png"

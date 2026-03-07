@@ -171,6 +171,7 @@ export function OnboardingScreen() {
               if (selectedDate) setBirthDate(selectedDate)
             }}
             maximumDate={new Date()}
+            minimumDate={new Date(1900, 0, 1)}
           />
         </View>
       )}

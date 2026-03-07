@@ -10,6 +10,7 @@ import { MascotMessage } from '@/components/mascot-message'
 import { ReferenceBookManager } from '@/components/reference-book-manager'
 import { saveTimerState, loadTimerState, clearTimerState } from '@/lib/storage/study-timer'
 import { getStudyDay, getStudyDayDate } from '@/lib/date-utils'
+import { normalizeQuizText } from '@/lib/text-normalizer'
 import type { ReferenceBook } from '@/types/database'
 
 type ReviewTask = {
@@ -473,7 +474,10 @@ export default function StudyPage() {
           const data = await response.json()
           const questions = (data.questions || []).map((q: QuizQuestion) => ({
             ...q,
-            theme: themeItem,
+            question: normalizeQuizText(q.question || ''),
+            choices: (q.choices || []).map((choice) => normalizeQuizText(String(choice))),
+            explanation: q.explanation ? normalizeQuizText(q.explanation) : undefined,
+            theme: normalizeQuizText(themeItem),
           }))
           return questions
         })
@@ -805,7 +809,7 @@ export default function StudyPage() {
                       </div>
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-sm text-muted-foreground whitespace-pre-wrap">
-                          {theme}
+                          {normalizeQuizText(theme)}
                         </div>
                         <Button
                           type="button"
@@ -838,10 +842,10 @@ export default function StudyPage() {
                         <div className="space-y-4">
                           {quiz.themes[theme].questions.map((q, qIndex) => {
                             const answered = quiz.themes[theme].answers[qIndex] !== undefined
-                            const correctText = q.choices?.[q.correct_index] ?? ''
+                            const correctText = normalizeQuizText(q.choices?.[q.correct_index] ?? '')
                             return (
                               <div key={`${task.id}-${theme}-${qIndex}`} className="space-y-2">
-                                <div className="text-sm font-medium">{qIndex + 1}. {q.question}</div>
+                                <div className="text-sm font-medium">{qIndex + 1}. {normalizeQuizText(q.question)}</div>
                                 <div className="grid gap-2">
                                   {q.choices.map((choice, cIndex) => {
                                     const selected = quiz.themes[theme].answers[qIndex] === cIndex
@@ -859,7 +863,7 @@ export default function StudyPage() {
                                           } ${answered ? 'cursor-default' : 'cursor-pointer'}`}
                                         disabled={answered}
                                       >
-                                        {choice}
+                                        {normalizeQuizText(choice)}
                                       </button>
                                     )
                                   })}
@@ -879,7 +883,7 @@ export default function StudyPage() {
                                     </div>
                                     {q.explanation && (
                                       <div className="rounded-md border border-muted bg-muted/40 px-3 py-2 text-sm whitespace-pre-wrap">
-                                        解説: {q.explanation}
+                                        解説: {normalizeQuizText(q.explanation)}
                                       </div>
                                     )}
                                   </>
@@ -923,3 +927,4 @@ export default function StudyPage() {
     </div>
   )
 }
+

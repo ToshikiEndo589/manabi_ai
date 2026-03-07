@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
     Alert,
     Pressable,
@@ -20,6 +20,8 @@ import { Ionicons } from '@expo/vector-icons'
 import { getNextDueDate } from '../lib/sm2'
 
 export function FlashcardScreen() {
+    type KeyboardAwareHandle = { update?: () => void }
+
     const { userId } = useProfile()
     const [materials, setMaterials] = useState<ReviewMaterial[]>([])
     const [referenceBooks, setReferenceBooks] = useState<ReferenceBook[]>([])
@@ -32,11 +34,10 @@ export function FlashcardScreen() {
     const [selectedBookId, setSelectedBookId] = useState<string | null>(null)
     const [subjectInput, setSubjectInput] = useState('')
     const [contentInput, setContentInput] = useState('')
-    const [selectedDate, setSelectedDate] = useState(new Date())
 
     // Book picker
     const [showBookPicker, setShowBookPicker] = useState(false)
-    const keyboardRef = useRef<any>(null)
+    const keyboardRef = useRef<KeyboardAwareHandle | null>(null)
 
     const retryKeyboardAwareUpdate = () => {
         ;[0, 120, 280, 520].forEach((delay) => {
@@ -46,14 +47,15 @@ export function FlashcardScreen() {
         })
     }
 
-    useEffect(() => {
-        loadData()
-    }, [userId])
+    const fetchScreenData = useCallback(async () => {
+        if (!userId) {
+            return {
+                books: [] as ReferenceBook[],
+                materials: [] as ReviewMaterial[],
+                errorMessage: null as string | null,
+            }
+        }
 
-    const loadData = async () => {
-        setLoading(true)
-
-        // Load Books
         const { data: booksData } = await supabase
             .from('reference_books')
             .select('*')
@@ -61,11 +63,6 @@ export function FlashcardScreen() {
             .is('deleted_at', null)
             .order('created_at', { ascending: false })
 
-        if (booksData) {
-            setReferenceBooks(booksData as ReferenceBook[])
-        }
-
-        // Load Materials
         const { data: materialsData, error } = await supabase
             .from('review_materials')
             .select('*')
@@ -74,20 +71,59 @@ export function FlashcardScreen() {
 
         if (error) {
             console.error(error)
-            Alert.alert('エラー', '単語帳データの読み込みに失敗しました。')
-        } else {
-            setMaterials(materialsData as ReviewMaterial[])
+            return {
+                books: (booksData || []) as ReferenceBook[],
+                materials: [] as ReviewMaterial[],
+                errorMessage: '単語帳データの読み込みに失敗しました。',
+            }
         }
 
+        return {
+            books: (booksData || []) as ReferenceBook[],
+            materials: (materialsData || []) as ReviewMaterial[],
+            errorMessage: null as string | null,
+        }
+    }, [userId])
+
+    const loadData = useCallback(async () => {
+        setLoading(true)
+        const { books, materials: nextMaterials, errorMessage } = await fetchScreenData()
+        setReferenceBooks(books)
+        setMaterials(nextMaterials)
+        if (errorMessage) {
+            Alert.alert('エラー', errorMessage)
+        }
         setLoading(false)
-    }
+    }, [fetchScreenData])
+
+    useEffect(() => {
+        let isActive = true
+
+        const initialize = async () => {
+            setLoading(true)
+            const { books, materials: nextMaterials, errorMessage } = await fetchScreenData()
+            if (!isActive) return
+
+            setReferenceBooks(books)
+            setMaterials(nextMaterials)
+            if (errorMessage) {
+                Alert.alert('エラー', errorMessage)
+            }
+            setLoading(false)
+        }
+
+        void initialize()
+
+        return () => {
+            isActive = false
+        }
+    }, [fetchScreenData])
 
     const openCreateModal = () => {
         setEditingCardId(null)
         setSelectedBookId(null)
         setSubjectInput('')
         setContentInput('')
-        setSelectedDate(new Date())
         setShowCreateModal(true)
     }
 
@@ -96,7 +132,6 @@ export function FlashcardScreen() {
         setSelectedBookId(material.reference_book_id)
         setSubjectInput(material.subject)
         setContentInput(material.content)
-        setSelectedDate(material.created_at ? new Date(material.created_at) : new Date())
         setShowCreateModal(true)
     }
 
@@ -127,7 +162,7 @@ export function FlashcardScreen() {
             } else {
                 Alert.alert('成功', '単語カードを更新しました。')
                 setShowCreateModal(false)
-                loadData()
+                await loadData()
             }
         } else {
             // Create new
@@ -164,7 +199,7 @@ export function FlashcardScreen() {
 
                 Alert.alert('成功', '新しい単語カードを作成しました！')
                 setShowCreateModal(false)
-                loadData()
+                await loadData()
             }
         }
         setLoading(false)
@@ -258,7 +293,7 @@ export function FlashcardScreen() {
                     style={{ flex: 1 }}
                     contentContainerStyle={styles.modalBody}
                     keyboardShouldPersistTaps="handled"
-                    innerRef={(ref) => { keyboardRef.current = ref }}
+                    innerRef={(ref: KeyboardAwareHandle | null) => { keyboardRef.current = ref }}
                     onKeyboardWillShow={retryKeyboardAwareUpdate}
                     onKeyboardDidShow={retryKeyboardAwareUpdate}
                     enableOnAndroid

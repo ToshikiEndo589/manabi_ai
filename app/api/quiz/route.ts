@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import { normalizeQuizText } from '@/lib/text-normalizer'
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'dummy',
@@ -12,29 +13,61 @@ type QuizQuestion = {
   explanation?: string
 }
 
+type Usage = {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
+
+const INPUT_COST_USD_PER_1M = 0.25
+const OUTPUT_COST_USD_PER_1M = 2.0
+const USD_TO_JPY = 155
+const QUIZ_DIFFICULTY_TEXT = '普通（標準レベル）'
+
+function buildUsageData(usage: Usage) {
+  const inputCostUSD = (usage.prompt_tokens / 1_000_000) * INPUT_COST_USD_PER_1M
+  const outputCostUSD = (usage.completion_tokens / 1_000_000) * OUTPUT_COST_USD_PER_1M
+  const totalCostUSD = inputCostUSD + outputCostUSD
+
+  return {
+    inputTokens: usage.prompt_tokens,
+    outputTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens,
+    inputCostUSD,
+    outputCostUSD,
+    totalCostUSD,
+    totalCostJPY: totalCostUSD * USD_TO_JPY,
+  }
+}
+
+function shuffleChoices(choices: string[], correctIndex: number): { shuffledChoices: string[]; newCorrectIndex: number } {
+  const indices = Array.from({ length: choices.length }, (_, i) => i)
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[indices[i], indices[j]] = [indices[j], indices[i]]
+  }
+
+  return {
+    shuffledChoices: indices.map((i) => choices[i]),
+    newCorrectIndex: indices.indexOf(correctIndex),
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { note, count, difficulty } = await req.json()
-    const questionCount = Number.isFinite(count) ? Math.min(Math.max(count, 1), 5) : 3
-    const normalizedDifficulty =
-      difficulty === 'easy' || difficulty === 'normal' || difficulty === 'hard'
-        ? difficulty
-        : 'normal'
-    const difficultyText =
-      normalizedDifficulty === 'easy'
-        ? '易しい（基本・基礎中心）'
-        : normalizedDifficulty === 'hard'
-          ? '難しい（応用・ひっかけ含む）'
-          : '普通（標準レベル）'
+    const { note, count } = await req.json()
 
-    if (!note || typeof note !== 'string' || note.trim().length === 0) {
+    const noteText = typeof note === 'string' ? note.trim() : ''
+    if (!noteText) {
       return NextResponse.json({ error: 'note is required' }, { status: 400 })
     }
+
+    const questionCount = Number.isFinite(count) ? Math.min(Math.max(count, 1), 5) : 3
 
     const systemPrompt =
       'あなたは受験生向けの復習クイズ作成AIです。' +
       'ユーザーの学習内容から4択問題を作成してください。' +
-      `難易度は${difficultyText}に合わせてください。` +
+      `難易度は${QUIZ_DIFFICULTY_TEXT}に固定してください。` +
       '必ずJSONのみで出力し、形式は次の通りです。' +
       '{"questions":[{"question":"...","choices":["...","...","...","..."],"correct_index":0,"explanation":"..."}]}' +
       'choicesは必ず4つ、correct_indexは0-3の整数、explanationは簡潔な解説を含めてください。' +
@@ -46,40 +79,13 @@ export async function POST(req: NextRequest) {
         { role: 'system', content: systemPrompt },
         {
           role: 'user',
-          content: `学習内容:\n${note}\n\n問題数:${questionCount}\n難易度:${difficultyText}`,
+          content: `学習内容:\n${noteText}\n\n問題数:${questionCount}\n難易度:${QUIZ_DIFFICULTY_TEXT}`,
         },
       ],
       response_format: { type: 'json_object' },
-
     })
 
     const extractedText = completion.choices[0]?.message?.content?.trim()
-
-    // --- トークン数と料金の計算・ログ出力 ---
-    const usage = completion.usage
-    if (usage) {
-      const inputTokens = usage.prompt_tokens
-      const outputTokens = usage.completion_tokens
-      const totalTokens = usage.total_tokens
-
-      // gpt-5-mini pricing (from user screenshot):
-      // Input: $0.25 / 1M tokens
-      // Output: $2.00 / 1M tokens
-      const inputCostUSD = (inputTokens / 1_000_000) * 0.25
-      const outputCostUSD = (outputTokens / 1_000_000) * 2.00
-      const totalCostUSD = inputCostUSD + outputCostUSD
-
-      // 1ドル = 155円
-      const totalCostJPY = totalCostUSD * 155
-
-      console.log('--- OpenAI API Usage (gpt-5-mini) ---')
-      console.log(`Input Tokens:  ${inputTokens} ($${inputCostUSD.toFixed(6)})`)
-      console.log(`Output Tokens: ${outputTokens} ($${outputCostUSD.toFixed(6)})`)
-      console.log(`Total Tokens:  ${totalTokens}`)
-      console.log(`Total Cost:    $${totalCostUSD.toFixed(6)} (約 ${totalCostJPY.toFixed(4)} 円)`)
-      console.log('---------------------------------------')
-    }
-
     if (!extractedText) {
       return NextResponse.json({ error: 'empty response' }, { status: 500 })
     }
@@ -87,71 +93,55 @@ export async function POST(req: NextRequest) {
     let parsed: { questions: QuizQuestion[] }
     try {
       parsed = JSON.parse(extractedText)
-    } catch (error) {
+    } catch {
       return NextResponse.json({ error: 'invalid json' }, { status: 500 })
     }
 
     const questions = (parsed.questions || [])
       .filter((q) => q && Array.isArray(q.choices) && q.choices.length === 4)
       .map((q) => {
-        const originalChoices = q.choices.map((c: unknown) => String(c))
+        const normalizedChoices = q.choices.map((choice: unknown) => normalizeQuizText(String(choice ?? '')))
         const correctIndex = Number(q.correct_index ?? 0)
-
-        // Create an array of indices [0, 1, 2, 3] and shuffle them
-        const indices = Array.from({ length: originalChoices.length }, (_, i) => i)
-        for (let i = indices.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [indices[i], indices[j]] = [indices[j], indices[i]]
-        }
-
-        // Reorder choices based on shuffled indices
-        const shuffledChoices = indices.map((i) => originalChoices[i])
-
-        // Find where the original correct answer moved to
-        // indices[newIndex] = oldIndex
-        // We want newIndex where indices[newIndex] == correctIndex
-        const newCorrectIndex = indices.indexOf(correctIndex)
+        const { shuffledChoices, newCorrectIndex } = shuffleChoices(normalizedChoices, correctIndex)
+        const normalizedQuestion = normalizeQuizText(String(q.question || '').trim())
+        const normalizedExplanation = normalizeQuizText(String(q.explanation || '').trim())
 
         return {
-          question: String(q.question || '').trim(),
+          question: normalizedQuestion,
           choices: shuffledChoices,
           correct_index: newCorrectIndex,
-          explanation: String(q.explanation || '').trim() || undefined,
+          explanation: normalizedExplanation || undefined,
         }
       })
       .filter((q) => q.question && q.correct_index >= 0 && q.correct_index < 4)
 
-    let usageData = undefined
-    if (usage) {
-      usageData = {
-        inputTokens: usage.prompt_tokens,
-        outputTokens: usage.completion_tokens,
-        totalTokens: usage.total_tokens,
-        inputCostUSD: (usage.prompt_tokens / 1_000_000) * 0.25,
-        outputCostUSD: (usage.completion_tokens / 1_000_000) * 2.00,
-        totalCostUSD: ((usage.prompt_tokens / 1_000_000) * 0.25) + ((usage.completion_tokens / 1_000_000) * 2.00),
-        totalCostJPY: (((usage.prompt_tokens / 1_000_000) * 0.25) + ((usage.completion_tokens / 1_000_000) * 2.00)) * 155,
-      }
+    const usage = completion.usage as Usage | undefined
+    const usageData = usage ? buildUsageData(usage) : undefined
+
+    if (usageData) {
+      console.log('--- OpenAI API Usage (gpt-5-mini) ---')
+      console.log(`Input Tokens:  ${usageData.inputTokens} ($${usageData.inputCostUSD.toFixed(6)})`)
+      console.log(`Output Tokens: ${usageData.outputTokens} ($${usageData.outputCostUSD.toFixed(6)})`)
+      console.log(`Total Tokens:  ${usageData.totalTokens}`)
+      console.log(`Total Cost:    $${usageData.totalCostUSD.toFixed(6)} (約 ${usageData.totalCostJPY.toFixed(4)} 円)`)
+      console.log('---------------------------------------')
     }
 
     return NextResponse.json({ questions, usage: usageData })
   } catch (error) {
     console.error('Quiz API error:', error)
-    // エラーの詳細をログに出力
+
     if (error instanceof Error) {
       console.error('Error name:', error.name)
       console.error('Error message:', error.message)
       console.error('Error stack:', error.stack)
     }
-    // OpenAI APIのエラーの場合、詳細情報を取得
+
     if (typeof error === 'object' && error !== null) {
       console.error('Error details:', JSON.stringify(error, null, 2))
     }
 
     const errorMessage = error instanceof Error ? error.message : 'server error'
-    return NextResponse.json(
-      { error: 'server error', details: errorMessage },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'server error', details: errorMessage }, { status: 500 })
   }
 }
