@@ -40,6 +40,16 @@ function buildUsageData(usage: Usage | ResponseUsage) {
     totalCostJPY: totalCostUSD * USD_TO_JPY,
   }
 }
+
+function normalizeThemeQaAnswer(text: string) {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-*\u2022\u30fb]\s+/, '').trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -63,19 +73,19 @@ export async function POST(req: NextRequest) {
       'You are a study assistant.',
       'Respond in natural Japanese.',
       'Keep answers concise and practical.',
-      'Use 1  short sentences.',
-      'Include 1 appropriate emoji naturally in the answer.',
-      'Use at most 3 bullet points only when needed.',
+      'Use 2 to 5 short sentences.',
+      'Do not use bullet points, markdown lists, or leading hyphens.',
+      'If you want separation, use blank lines only.',
       'Start with a direct one-line answer first.',
       'Do not mention model names.',
     ].join(' ')
 
     const contextLines = [
-      `科目: ${subjectText}`,
-      `テーマ: ${themeText}`,
-      quizQuestionText ? `直近の問題: ${quizQuestionText}` : '',
-      explanationText ? `直近の解説: ${explanationText}` : '',
-      `ユーザーの質問: ${questionText}`,
+      `Subject: ${subjectText}`,
+      `Theme: ${themeText}`,
+      quizQuestionText ? `Recent Question: ${quizQuestionText}` : '',
+      explanationText ? `Recent Explanation: ${explanationText}` : '',
+      `User Question: ${questionText}`,
     ].filter(Boolean)
 
     const completion = await openai.responses.create({
@@ -93,7 +103,7 @@ export async function POST(req: NextRequest) {
 
     const answerRaw = typeof completion.output_text === 'string' ? completion.output_text.trim() : ''
 
-    let answer = answerRaw.replace(/\n{3,}/g, '\n\n').trim().slice(0, 1200)
+    let answer = normalizeThemeQaAnswer(answerRaw).slice(0, 1200)
     if (!answer) {
       console.warn('[theme-qa] empty model output', {
         status: completion.status,

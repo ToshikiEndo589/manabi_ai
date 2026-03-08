@@ -44,7 +44,7 @@ function shuffleChoices(choices: string[], correctIndex: number): { shuffledChoi
   const indices = Array.from({ length: choices.length }, (_, i) => i)
   for (let i = indices.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1))
-    ;[indices[i], indices[j]] = [indices[j], indices[i]]
+      ;[indices[i], indices[j]] = [indices[j], indices[i]]
   }
 
   return {
@@ -65,13 +65,13 @@ export async function POST(req: NextRequest) {
     const questionCount = Number.isFinite(count) ? Math.min(Math.max(count, 1), 5) : 3
 
     const systemPrompt =
-      'あなたは受験生向けの復習クイズ作成AIです。' +
-      'ユーザーの学習内容から4択問題を作成してください。' +
-      `難易度は${QUIZ_DIFFICULTY_TEXT}に固定してください。` +
-      '必ずJSONのみで出力し、形式は次の通りです。' +
-      '{"questions":[{"question":"...","choices":["...","...","...","..."],"correct_index":0,"explanation":"..."}]}' +
-      'choicesは必ず4つ、correct_indexは0-3の整数、explanationは簡潔な解説を含めてください。' +
-      '【重要】同じ学習内容でも、毎回異なる切り口・表現で問題を作成してください（前回と同じ問題にならないように工夫してください）。'
+      'You are a review quiz creation AI for exam students. ' +
+      "Create a 4-choice quiz based on the user's study note. " +
+      `Fix the difficulty strictly to ${QUIZ_DIFFICULTY_TEXT}. ` +
+      'You must output ONLY in JSON format, exactly as follows: ' +
+      '{"questions":[{"question":"...","choices":["...","...","...","..."],"correct_index":0,"explanation":"..."}]} ' +
+      'There must be exactly 4 choices, correct_index must be an integer from 0 to 3, and explanation must be a concise explanation. ' +
+      '[IMPORTANT] Even for the same study note, create questions with different angles and expressions every time.'
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-5-mini',
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
         { role: 'system', content: systemPrompt },
         {
           role: 'user',
-          content: `学習内容:\n${noteText}\n\n問題数:${questionCount}\n難易度:${QUIZ_DIFFICULTY_TEXT}`,
+          content: `Study Note:\n${noteText}\n\nQuestion Count:${questionCount}\nDifficulty:${QUIZ_DIFFICULTY_TEXT}`,
         },
       ],
       response_format: { type: 'json_object' },

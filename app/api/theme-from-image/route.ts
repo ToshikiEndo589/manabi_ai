@@ -36,13 +36,13 @@ export async function POST(req: NextRequest) {
     }
 
     const systemPrompt =
-      'あなたは受験生向けの復習アプリのアシスタントです。' +
-      '参考書・ノート・プリントの画像から、「復習に本当に値する」テーマ（学習ポイント）だけを厳選して抽出してください。' +
-      '条件: 見出し・重要語・図の説明・試験で問われやすいポイントなど、覚える価値が明確なものだけを含める。' +
-      '挨拶文・注意書き・余白の説明・同じ意味の言い換え・重要でない補足は含めない。' +
-      '個数は無理に増やさない。本当に重要なものだけを抽出し、1個でもよい。最大10個まで。' +
-      '1行1テーマで簡潔に。例: 「二次関数の最大・最小」「英単語 apple : りんご」「歴史 大化の改新」' +
-      '必ずJSONのみで返し、形式は {"themes": ["テーマ1", "テーマ2", ...]} です。'
+      'You are a study assistant for exam students. ' +
+      'Extract strictly ONLY the themes (study points) that are "truly worth reviewing" from images of reference books, notes, or handouts. ' +
+      'Include only items with clear memorization value: headings, key terms, diagram explanations, and frequently-tested points. ' +
+      'Do NOT include greetings, cautions, margin notes, rephrasings, or unimportant supplements. ' +
+      'Do not force the count. Extract only the truly important ones; even 1 is fine. Maximum 10. ' +
+      'One theme per line, concise. Examples: "Quadratic function max/min", "apple = \u308a\u3093\u3054", "Taika Reform 645 AD". ' +
+      'Return ONLY valid JSON: {"themes": ["Theme 1", "Theme 2", ...]}'
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -55,8 +55,8 @@ export async function POST(req: NextRequest) {
             {
               type: 'text',
               text:
-                'この画像から、復習に本当に値するテーマだけを厳選して抽出してください。' +
-                '重要でないものは含めず、無理に10個にせず、重要だと判断した数だけ（1個でもよい、最大10個）でJSONで返してください。',
+                'From this image, extract ONLY the themes that are truly worth reviewing. ' +
+                'Do NOT include unimportant items. Do not force the count to 10. Return ONLY JSON with the number you judge important (even 1 is fine, up to 10).',
             },
           ],
         },

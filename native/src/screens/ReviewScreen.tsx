@@ -164,15 +164,16 @@ export function ReviewScreen() {
         reviewMaterialId: string | null
         subject: string
         theme: string
+        questionIndex: number
         quizQuestion: string
         explanation: string
         referenceBookId: string | null
     }
-    const [showAskAIModal, setShowAskAIModal] = useState(false)
     const [askAIContext, setAskAIContext] = useState<AskAIContext | null>(null)
     const [askAIInput, setAskAIInput] = useState('')
     const [askAIAnswer, setAskAIAnswer] = useState('')
     const [askAILoading, setAskAILoading] = useState(false)
+    const showAskAIModal = false
 
     const endpoint = useMemo(() => {
         const direct = process.env.EXPO_PUBLIC_QA_ENDPOINT
@@ -1597,29 +1598,51 @@ export function ReviewScreen() {
     }
 
 
-    const openAskAIModalFromExplanation = (task: ReviewTask, theme: string, question: QuizQuestion) => {
+    const normalizeAskAIAnswer = (text: string) =>
+        text
+            .split('\n')
+            .map((line) => line.replace(/^\s*[-*•・]\s+/, '').replace(/\s+$/g, ''))
+            .join('\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim()
+
+    const isAskAIContextActive = (taskId: string, theme: string, questionIndex: number) =>
+        askAIContext?.taskId === taskId &&
+        askAIContext?.theme === theme &&
+        askAIContext?.questionIndex === questionIndex
+
+    const openAskAIInlineFromExplanation = (task: ReviewTask, theme: string, question: QuizQuestion, questionIndex: number) => {
+        if (askAILoading) return
+        if (isAskAIContextActive(task.id, theme, questionIndex)) {
+            setAskAIContext(null)
+            setAskAIInput('')
+            setAskAIAnswer('')
+            return
+        }
+
         const subject = task.study_logs?.subject?.trim() || '未分類'
         setAskAIContext({
             taskId: task.id,
             reviewMaterialId: task.review_material_id || null,
             subject,
             theme,
+            questionIndex,
             quizQuestion: question.question || '',
             explanation: question.explanation || '',
             referenceBookId: task.study_logs?.reference_book_id || null,
         })
         setAskAIInput('')
         setAskAIAnswer('')
-        setShowAskAIModal(true)
     }
 
-    const closeAskAIModal = () => {
+    const closeAskAIInline = () => {
         if (askAILoading) return
-        setShowAskAIModal(false)
         setAskAIContext(null)
         setAskAIInput('')
         setAskAIAnswer('')
     }
+
+    const closeAskAIModal = closeAskAIInline
 
     const handleSubmitAskAI = async () => {
         const input = askAIInput.trim()
@@ -1667,7 +1690,7 @@ export function ReviewScreen() {
                 console.log('---------------------------------------')
             }
 
-            const answerText = typeof data?.answer === 'string' ? data.answer.trim() : ''
+            const answerText = typeof data?.answer === 'string' ? normalizeAskAIAnswer(data.answer) : ''
             if (!answerText) {
                 throw new Error('AIの回答が空でした。')
             }
@@ -2489,7 +2512,14 @@ export function ReviewScreen() {
     }, [currentTasks])
 
     return (
-        <ScrollView style={styles.screen} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <KeyboardAwareScrollView
+            style={styles.screen}
+            contentContainerStyle={styles.container}
+            keyboardShouldPersistTaps="handled"
+            enableOnAndroid
+            extraScrollHeight={Platform.OS === 'ios' ? 120 : 160}
+            showsVerticalScrollIndicator={false}
+        >
             <View style={styles.card}>
                 <View style={styles.cardHeaderColumn}>
                     <View style={styles.headerRow}>
@@ -2807,15 +2837,104 @@ export function ReviewScreen() {
                                                                                                 {q.explanation}
                                                                                             </Text>
                                                                                             <Pressable
-                                                                                                style={[styles.outlineButton, styles.askAIButtonInline, askAILoading && { opacity: 0.6 }]}
-                                                                                                onPress={() => openAskAIModalFromExplanation(task, theme, q)}
+                                                                                                style={[
+                                                                                                    styles.outlineButton,
+                                                                                                    styles.askAIButtonInline,
+                                                                                                    isAskAIContextActive(task.id, theme, qIndex) && styles.askAIButtonInlineActive,
+                                                                                                    askAILoading && isAskAIContextActive(task.id, theme, qIndex) && { opacity: 0.75 },
+                                                                                                ]}
+                                                                                                onPress={() => openAskAIInlineFromExplanation(task, theme, q, qIndex)}
                                                                                                 disabled={askAILoading}
                                                                                             >
-                                                                                                <Ionicons name="chatbubble-ellipses-outline" size={16} color="#7c3aed" />
+                                                                                                <Ionicons
+                                                                                                    name={isAskAIContextActive(task.id, theme, qIndex) ? 'sunny' : 'chatbubble-ellipses-outline'}
+                                                                                                    size={16}
+                                                                                                    color="#a16207"
+                                                                                                />
                                                                                                 <Text style={[styles.outlineButtonText, styles.askAIButtonInlineText]}>
                                                                                                     AIに質問
                                                                                                 </Text>
                                                                                             </Pressable>
+                                                                                            {isAskAIContextActive(task.id, theme, qIndex) && (
+                                                                                                <View style={styles.inlineAskAICard}>
+                                                                                                    <View style={styles.inlineAskAIHeader}>
+                                                                                                        <View style={styles.inlineAskAIHeaderBadge}>
+                                                                                                            <Ionicons name="bulb-outline" size={14} color="#a16207" />
+                                                                                                            <Text style={styles.inlineAskAIHeaderBadgeText}>この問題を深掘り</Text>
+                                                                                                        </View>
+                                                                                                        <Text style={styles.inlineAskAISubtitle}>
+                                                                                                            解説で迷ったところを、そのまま質問できます。
+                                                                                                        </Text>
+                                                                                                    </View>
+
+                                                                                                    <Text style={styles.inlineAskAILabel}>質問内容</Text>
+                                                                                                    <View style={styles.inlineAskAIInputShell}>
+                                                                                                        <TextInput
+                                                                                                            style={styles.inlineAskAIInput}
+                                                                                                            value={askAIInput}
+                                                                                                            onChangeText={(text) => {
+                                                                                                                setAskAIInput(text)
+                                                                                                                if (askAIAnswer) setAskAIAnswer('')
+                                                                                                            }}
+                                                                                                            multiline
+                                                                                                            placeholder="この解説のどこが分からないかを入力"
+                                                                                                            placeholderTextColor="#a8a29e"
+                                                                                                            textAlignVertical="top"
+                                                                                                            editable={!askAILoading}
+                                                                                                        />
+                                                                                                    </View>
+                                                                                                    <Text style={styles.inlineAskAIHelper}>
+                                                                                                        例: なぜこの選択肢は誤りで、正解はどう見抜くの？
+                                                                                                    </Text>
+
+                                                                                                    <View style={styles.inlineAskAIActions}>
+                                                                                                        <Pressable
+                                                                                                            style={styles.inlineAskAIClearButton}
+                                                                                                            onPress={() => {
+                                                                                                                setAskAIInput('')
+                                                                                                                setAskAIAnswer('')
+                                                                                                            }}
+                                                                                                            disabled={askAILoading}
+                                                                                                        >
+                                                                                                            <Text style={styles.inlineAskAIClearText}>クリア</Text>
+                                                                                                        </Pressable>
+                                                                                                        <Pressable
+                                                                                                            style={[styles.inlineAskAISubmit, askAILoading && { opacity: 0.72 }]}
+                                                                                                            onPress={handleSubmitAskAI}
+                                                                                                            disabled={askAILoading}
+                                                                                                        >
+                                                                                                            {askAILoading ? (
+                                                                                                                <ActivityIndicator size="small" color="#78350f" />
+                                                                                                            ) : (
+                                                                                                                <>
+                                                                                                                    <Ionicons name="paper-plane-outline" size={16} color="#78350f" />
+                                                                                                                    <Text style={styles.inlineAskAISubmitText}>AIに質問</Text>
+                                                                                                                </>
+                                                                                                            )}
+                                                                                                        </Pressable>
+                                                                                                    </View>
+
+                                                                                                    {askAILoading && (
+                                                                                                        <View style={styles.inlineAskAILoadingRow}>
+                                                                                                            <ActivityIndicator size="small" color="#d97706" />
+                                                                                                            <Text style={styles.inlineAskAILoadingText}>回答を作成中...</Text>
+                                                                                                        </View>
+                                                                                                    )}
+
+                                                                                                    {askAIAnswer ? (
+                                                                                                        <View style={styles.inlineAskAIAnswerCard}>
+                                                                                                            <View style={styles.inlineAskAIAnswerHeader}>
+                                                                                                                <View style={styles.inlineAskAIAnswerBadge}>
+                                                                                                                    <Ionicons name="sparkles" size={13} color="#a16207" />
+                                                                                                                    <Text style={styles.inlineAskAIAnswerLabel}>AIの回答</Text>
+                                                                                                                </View>
+                                                                                                                <Text style={styles.inlineAskAIAnswerSubLabel}>この問題に沿った補足</Text>
+                                                                                                            </View>
+                                                                                                            <Text style={styles.inlineAskAIAnswerText}>{askAIAnswer}</Text>
+                                                                                                        </View>
+                                                                                                    ) : null}
+                                                                                                </View>
+                                                                                            )}
                                                                                         </>
                                                                                     )}
                                                                                     {(() => {
@@ -3968,7 +4087,7 @@ export function ReviewScreen() {
                     </KeyboardAwareScrollView>
                 </KeyboardAvoidingView>
             </Modal>
-        </ScrollView>
+        </KeyboardAwareScrollView>
     )
 }
 
@@ -4040,13 +4159,205 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
-        borderColor: '#d8b4fe',
-        backgroundColor: '#f5f3ff',
+        gap: 8,
+        borderColor: '#fcd34d',
+        backgroundColor: '#fffbeb',
+        borderRadius: 16,
+        shadowColor: '#f59e0b',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
+        elevation: 2,
+    },
+    askAIButtonInlineActive: {
+        backgroundColor: '#fef3c7',
+        borderColor: '#f59e0b',
+    },
+    askAIIconBadge: {
+        width: 30,
+        height: 30,
+        borderRadius: 15,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#fff7ed',
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+    },
+    askAIIconBadgeActive: {
+        backgroundColor: '#f59e0b',
+        borderColor: '#f59e0b',
+    },
+    askAIButtonInlineTextWrap: {
+        flex: 1,
+    },
+    askAIButtonInlineEyebrow: {
+        fontSize: 10,
+        fontWeight: '800',
+        letterSpacing: 0.8,
+        color: '#a16207',
+        marginBottom: 2,
     },
     askAIButtonInlineText: {
-        color: '#7c3aed',
+        color: '#92400e',
+        fontWeight: '800',
+        fontSize: 14,
+    },
+    inlineAskAICard: {
+        marginTop: 12,
+        backgroundColor: '#fffdf5',
+        borderWidth: 1,
+        borderColor: '#fde68a',
+        borderRadius: 20,
+        padding: 14,
+        shadowColor: '#f59e0b',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.08,
+        shadowRadius: 18,
+        elevation: 2,
+    },
+    inlineAskAIHeader: {
+        gap: 8,
+        marginBottom: 10,
+    },
+    inlineAskAIHeaderBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'flex-start',
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 999,
+        backgroundColor: '#fef3c7',
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+    },
+    inlineAskAIHeaderBadgeText: {
+        fontSize: 11,
+        fontWeight: '800',
+        color: '#a16207',
+    },
+    inlineAskAISubtitle: {
+        fontSize: 12,
+        lineHeight: 18,
+        color: '#92400e',
+    },
+    inlineAskAILabel: {
+        fontSize: 13,
+        fontWeight: '800',
+        color: '#92400e',
+        marginBottom: 6,
+    },
+    inlineAskAIInputShell: {
+        borderWidth: 1,
+        borderColor: '#fde68a',
+        borderRadius: 16,
+        backgroundColor: '#ffffff',
+        paddingHorizontal: 12,
+    },
+    inlineAskAIInput: {
+        minHeight: 96,
+        paddingVertical: 12,
+        fontSize: 14,
+        color: '#1f2937',
+        textAlignVertical: 'top',
+    },
+    inlineAskAIHelper: {
+        marginTop: 8,
+        fontSize: 12,
+        lineHeight: 18,
+        color: '#a16207',
+    },
+    inlineAskAIActions: {
+        marginTop: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
+    inlineAskAIClearButton: {
+        minWidth: 96,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+        backgroundColor: '#ffffff',
+    },
+    inlineAskAIClearText: {
+        fontSize: 14,
+        fontWeight: '800',
+        color: '#a16207',
+    },
+    inlineAskAISubmit: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#fcd34d',
+        borderRadius: 14,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        shadowColor: '#f59e0b',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.12,
+        shadowRadius: 12,
+        elevation: 3,
+    },
+    inlineAskAISubmitText: {
+        fontSize: 14,
+        fontWeight: '800',
+        color: '#78350f',
+    },
+    inlineAskAILoadingRow: {
+        marginTop: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    inlineAskAILoadingText: {
+        fontSize: 12,
         fontWeight: '700',
+        color: '#a16207',
+    },
+    inlineAskAIAnswerCard: {
+        marginTop: 12,
+        backgroundColor: '#fff8db',
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+        borderRadius: 16,
+        padding: 14,
+    },
+    inlineAskAIAnswerHeader: {
+        gap: 8,
+        marginBottom: 10,
+    },
+    inlineAskAIAnswerBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'flex-start',
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 999,
+        backgroundColor: '#fff3bf',
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+    },
+    inlineAskAIAnswerLabel: {
+        fontSize: 12,
+        fontWeight: '800',
+        color: '#a16207',
+    },
+    inlineAskAIAnswerSubLabel: {
+        fontSize: 12,
+        color: '#92400e',
+    },
+    inlineAskAIAnswerText: {
+        fontSize: 14,
+        lineHeight: 22,
+        color: '#3f3f46',
     },
 
     photoThemeButton: {
