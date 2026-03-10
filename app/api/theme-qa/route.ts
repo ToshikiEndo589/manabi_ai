@@ -54,9 +54,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const questionText = typeof body?.question === 'string' ? body.question.trim() : ''
-    const themeText = typeof body?.theme === 'string' ? body.theme.trim() : ''
-    const subjectText =
-      typeof body?.subject === 'string' && body.subject.trim() ? body.subject.trim() : '未分類'
+    const choicesRaw = Array.isArray(body?.choices) ? (body.choices as unknown[]).filter((c): c is string => typeof c === 'string') : []
     const explanationText =
       typeof body?.explanation === 'string' ? body.explanation.trim().slice(0, 2000) : ''
     const quizQuestionText =
@@ -64,9 +62,6 @@ export async function POST(req: NextRequest) {
 
     if (!questionText) {
       return NextResponse.json({ error: 'question is required' }, { status: 400 })
-    }
-    if (!themeText) {
-      return NextResponse.json({ error: 'theme is required' }, { status: 400 })
     }
 
     const systemPrompt = [
@@ -82,9 +77,8 @@ export async function POST(req: NextRequest) {
     ].join(' ')
 
     const contextLines = [
-      `Subject: ${subjectText}`,
-      `Theme: ${themeText}`,
       quizQuestionText ? `Recent Question: ${quizQuestionText}` : '',
+      choicesRaw.length > 0 ? `Choices: ${choicesRaw.map((c, i) => `${i + 1}. ${c}`).join(' / ')}` : '',
       explanationText ? `Recent Explanation: ${explanationText}` : '',
       `User Question: ${questionText}`,
     ].filter(Boolean)

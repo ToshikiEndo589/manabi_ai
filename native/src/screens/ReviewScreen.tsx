@@ -166,6 +166,7 @@ export function ReviewScreen() {
         theme: string
         questionIndex: number
         quizQuestion: string
+        choices: string[]
         explanation: string
         referenceBookId: string | null
     }
@@ -1642,6 +1643,7 @@ export function ReviewScreen() {
             theme,
             questionIndex,
             quizQuestion: question.question || '',
+            choices: question.choices || [],
             explanation: question.explanation || '',
             referenceBookId: task.study_logs?.reference_book_id || null,
         })
@@ -1679,9 +1681,8 @@ export function ReviewScreen() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    subject: askAIContext.subject,
-                    theme: askAIContext.theme,
                     quizQuestion: askAIContext.quizQuestion,
+                    choices: askAIContext.choices,
                     explanation: askAIContext.explanation,
                     question: input,
                 }),
