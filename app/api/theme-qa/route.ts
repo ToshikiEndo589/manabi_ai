@@ -78,6 +78,7 @@ export async function POST(req: NextRequest) {
       'If you want separation, use blank lines only.',
       'Start with a direct one-line answer first.',
       'Do not mention model names.',
+      'Please also use emojis.',
     ].join(' ')
 
     const contextLines = [

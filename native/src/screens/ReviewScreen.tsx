@@ -1284,13 +1284,27 @@ export function ReviewScreen() {
         )
     }
 
+    const normalizeThemeLine = (line: string) => line.replace(/^[-*•・]\s*/, '').trim()
+
+    const dedupeThemes = (themes: string[]) => {
+        const seen = new Set<string>()
+        return themes.filter((theme) => {
+            const normalized = normalizeThemeLine(theme)
+            if (!normalized || seen.has(normalized)) return false
+            seen.add(normalized)
+            return true
+        })
+    }
+
     const splitThemes = (text: string) => {
-        return text
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line) => line.replace(/^[-*•・]\s*/, '').trim())
-            .filter(Boolean)
+        return dedupeThemes(
+            text
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line) => normalizeThemeLine(line))
+                .filter(Boolean)
+        )
     }
 
     const getThemeKey = (taskId: string, theme: string) => `${taskId}::${theme}`
@@ -1921,7 +1935,7 @@ export function ReviewScreen() {
         const subject = selectedBook ? selectedBook.name : 'その他'
 
         // AIメモ（有効なもの）
-        const validNotes = aiNotes.filter((n) => n.trim())
+        const validNotes = dedupeThemes(aiNotes.map((n) => n.trim()).filter(Boolean))
         const aiPart = validNotes.map((n) => `・${n.trim()}`).join('\n')
 
         // 単語帳カード（有効なもの）
@@ -1938,13 +1952,15 @@ export function ReviewScreen() {
         const noteValue = [aiPart, flashcardPart].filter(Boolean).join('\n')
 
         // 1テーマ1件で保存するためテーマごとに分割（既存データ互換のためスキーマ変更なし）
-        const themeLines = noteValue
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line) => line.replace(/^[-*•・]\s*/, '').trim())
-            .filter(Boolean)
-        const themes = themeLines.length > 0 ? themeLines : [noteValue.trim() || '全体復習']
+        const themeLines = dedupeThemes(
+            noteValue
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line) => normalizeThemeLine(line))
+                .filter(Boolean)
+        )
+        const themes = themeLines.length > 0 ? themeLines : [normalizeThemeLine(noteValue.trim()) || '全体復習']
 
         setLoading(true)
 
