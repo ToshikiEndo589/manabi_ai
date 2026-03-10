@@ -575,6 +575,7 @@ export function ReviewScreen() {
                     `)
                     .eq('user_id', userId)
                     .order('created_at', { ascending: false })
+                    .limit(150)
 
                 if (qaError) {
                     errors.push('AIモード履歴の取得に失敗しました。')
@@ -639,7 +640,7 @@ export function ReviewScreen() {
                     .select('id, subject, content, rating, created_at, review_material_id, review_materials ( reference_book_id, sm2_interval, sm2_ease_factor, sm2_repetitions )')
                     .eq('user_id', userId)
                     .order('created_at', { ascending: false })
-                    .limit(200)
+                    .limit(150)
 
                 if (faError) {
                     errors.push('単語帳履歴の取得に失敗しました。')
@@ -673,7 +674,7 @@ export function ReviewScreen() {
                     .select('id, created_at, subject, theme, question, answer, reference_book_id, model')
                     .eq('user_id', userId)
                     .order('created_at', { ascending: false })
-                    .limit(300)
+                    .limit(150)
 
                 if (themeQAError) {
                     errors.push('AI質問履歴の読み込みに失敗しました。')
