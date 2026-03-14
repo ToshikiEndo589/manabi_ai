@@ -1,3 +1,5 @@
+import { getStudyDay, getStudyDayStartDate } from './date'
+
 /**
  * SM-2 スペースドリペティションアルゴリズム
  *
@@ -73,12 +75,8 @@ export function calculateSM2(
  * 次の復習日時を計算する（JST 0時基準）
  */
 export function getNextDueDate(nextDueDays: number): Date {
-    const now = new Date()
-    const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000)
-    const jstMidnight = new Date(
-        Date.UTC(jstNow.getUTCFullYear(), jstNow.getUTCMonth(), jstNow.getUTCDate())
-    )
+    const todayStudyDay = getStudyDay(new Date())
+    const todayStudyDayStart = getStudyDayStartDate(todayStudyDay)
     // 日本時間0時 = UTC前日15時 → JSTの (today + nextDueDays) 0時をUTCで返す
-    const baseMidnightUTC = jstMidnight.getTime() - 9 * 60 * 60 * 1000
-    return new Date(baseMidnightUTC + nextDueDays * 24 * 60 * 60 * 1000)
+    return new Date(todayStudyDayStart.getTime() + nextDueDays * 24 * 60 * 60 * 1000)
 }

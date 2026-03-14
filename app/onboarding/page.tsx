@@ -123,8 +123,8 @@ export default function OnboardingPage() {
         }
       }
 
-      // オンボーディング完了後、ホームへ
-      router.push('/app/home')
+      // Web の学習UIは廃止しているので、完了後は案内ページへ戻す
+      router.push('/')
       router.refresh()
     } catch (err: any) {
       setError(err.message || 'エラーが発生しました')

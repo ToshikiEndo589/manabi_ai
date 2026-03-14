@@ -7,9 +7,9 @@ export default function AuthCodeError() {
     const router = useRouter()
 
     useEffect(() => {
-        // After 3 seconds, redirect to login
+        // After 3 seconds, return to the blocked page since web login is disabled
         const timer = setTimeout(() => {
-            router.push('/login')
+            router.push('/blocked')
         }, 3000)
 
         return () => clearTimeout(timer)

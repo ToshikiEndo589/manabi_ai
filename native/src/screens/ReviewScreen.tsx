@@ -12,6 +12,7 @@ import {
     PanResponder,
     KeyboardAvoidingView,
     ActivityIndicator,
+    Keyboard,
 } from 'react-native'
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view'
 import { supabase } from '../lib/supabase'
@@ -20,6 +21,7 @@ import type { ReviewTask } from '../types'
 import { calculateSM2, getNextDueDate } from '../lib/sm2'
 import type { SM2Rating } from '../lib/sm2'
 import { formatDateLabel, getStudyDay, getStudyDayDate, getTodayStart } from '../lib/date'
+import { normalizeQuizText } from '../lib/text-normalizer'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { manipulateAsync as imageManipulateAsync, SaveFormat as ImageSaveFormat } from 'expo-image-manipulator'
@@ -54,6 +56,18 @@ type ThemeQuizState = {
 
 type QuizState = {
     themes: Record<string, ThemeQuizState>
+}
+
+type KeyboardAwareLayout = {
+    x: number
+    y: number
+    width: number
+    height: number
+}
+
+type KeyboardAwareContentOffset = {
+    x: number
+    y: number
 }
 
 type PersistedReviewProgress = {
@@ -243,8 +257,13 @@ export function ReviewScreen() {
     const cropRectRef = useRef<CropRect>(cropRect)
     const cropLayoutRef = useRef(cropContainerLayout)
     const cropImgSizeRef = useRef({ w: cropImageWidth, h: cropImageHeight })
+    const reviewKeyboardRef = useRef<any>(null)
     const contentModalKeyboardRef = useRef<any>(null)
     const createModalKeyboardRef = useRef<any>(null)
+    const askAIInlineCardRef = useRef<View | null>(null)
+    const askAILoadingRowRef = useRef<View | null>(null)
+    const askAIAnswerCardRef = useRef<View | null>(null)
+    const askAIScrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
     cropRectRef.current = cropRect
     cropLayoutRef.current = cropContainerLayout
     cropImgSizeRef.current = { w: cropImageWidth, h: cropImageHeight }
@@ -256,6 +275,76 @@ export function ReviewScreen() {
             }, delay)
         })
     }
+
+    const clearAskAIScrollTimers = () => {
+        askAIScrollTimersRef.current.forEach((timer) => clearTimeout(timer))
+        askAIScrollTimersRef.current = []
+    }
+
+    const scrollAskAINodeIntoView = (node: View | null, bottomOffset = 24) => {
+        if (!node) return
+
+        clearAskAIScrollTimers()
+
+        ;[0, 120, 280].forEach((delay) => {
+            const timer = setTimeout(() => {
+                const scrollIntoView =
+                    reviewKeyboardRef.current?.scrollIntoView ??
+                    reviewKeyboardRef.current?.props?.scrollIntoView
+
+                if (typeof scrollIntoView !== 'function') return
+
+                scrollIntoView(node, {
+                    getScrollPosition: (
+                        parentLayout: KeyboardAwareLayout,
+                        childLayout: KeyboardAwareLayout,
+                        contentOffset: KeyboardAwareContentOffset,
+                    ) => {
+                        const currentY = contentOffset.y
+                        const childTop = childLayout.y - parentLayout.y + currentY
+                        const childBottom = childTop + childLayout.height
+                        const visibleBottom = currentY + parentLayout.height - bottomOffset
+
+                        if (childBottom <= visibleBottom) {
+                            return {
+                                x: 0,
+                                y: currentY,
+                                animated: false,
+                            }
+                        }
+
+                        return {
+                            x: 0,
+                            y: Math.max(currentY, childBottom - parentLayout.height + bottomOffset),
+                            animated: true,
+                        }
+                    },
+                })
+            }, delay)
+
+            askAIScrollTimersRef.current.push(timer)
+        })
+    }
+
+    useEffect(() => {
+        return () => {
+            clearAskAIScrollTimers()
+        }
+    }, [])
+
+    useEffect(() => {
+        if (!askAILoading) {
+            clearAskAIScrollTimers()
+            return
+        }
+
+        scrollAskAINodeIntoView(askAILoadingRowRef.current ?? askAIInlineCardRef.current)
+    }, [askAILoading])
+
+    useEffect(() => {
+        if (!askAIAnswer) return
+        scrollAskAINodeIntoView(askAIAnswerCardRef.current ?? askAIInlineCardRef.current)
+    }, [askAIAnswer])
 
     const getCropDisplayRect = (): { offsetX: number; offsetY: number; displayW: number; displayH: number } => {
         const { width: cw, height: ch } = cropLayoutRef.current
@@ -439,14 +528,19 @@ export function ReviewScreen() {
         },
     }), [])
 
+    const getNextStudyDayStart = () => {
+        return new Date(getTodayStart().getTime() + 24 * 60 * 60 * 1000)
+    }
+
     const loadTasks = async () => {
         setLoading(true)
+        const nextStudyDayStart = getNextStudyDayStart()
         const { data, error } = await supabase
             .from('review_tasks')
             .select('id, due_at, status, study_log_id, review_material_id, study_logs(note, subject, started_at, reference_book_id), review_materials(content, subject, reference_book_id, created_at, study_date, sm2_interval, sm2_ease_factor, sm2_repetitions)')
             .eq('user_id', userId)
             .eq('status', 'pending')
-            .lte('due_at', new Date().toISOString())
+            .lt('due_at', nextStudyDayStart.toISOString())
             .order('due_at', { ascending: true })
 
         if (!error) {
@@ -485,12 +579,13 @@ export function ReviewScreen() {
     }
 
     const loadFutureTasks = async () => {
+        const nextStudyDayStart = getNextStudyDayStart()
         const { data: tasksData, error: tasksError } = await supabase
             .from('review_tasks')
             .select('id, due_at, status, study_log_id, review_material_id')
             .eq('user_id', userId)
             .eq('status', 'pending')
-            .gt('due_at', new Date().toISOString())
+            .gte('due_at', nextStudyDayStart.toISOString())
             .order('due_at', { ascending: true })
 
         if (tasksError) {
@@ -1430,7 +1525,6 @@ export function ReviewScreen() {
                 .delete()
                 .eq('review_material_id', materialId)
                 .eq('status', 'pending')
-                .gt('due_at', new Date().toISOString())
             const { error: insertError } = await supabase.from('review_tasks').insert({
                 user_id: userId,
                 review_material_id: materialId,
@@ -1545,7 +1639,9 @@ export function ReviewScreen() {
             }
 
             const questions = (data.questions || []).map((q: QuizQuestion) => {
-                const originalChoices = q.choices ? q.choices.map((c: any) => String(c)) : []
+                const originalChoices = q.choices
+                    ? q.choices.map((choice: unknown) => normalizeQuizText(String(choice)))
+                    : []
                 const correctIndex = Number(q.correct_index ?? 0)
 
                 // Create an array of indices [0, 1, 2, 3] and shuffle them
@@ -1563,7 +1659,9 @@ export function ReviewScreen() {
 
                 return {
                     ...q,
+                    question: normalizeQuizText(q.question),
                     choices: shuffledChoices,
+                    explanation: q.explanation ? normalizeQuizText(q.explanation) : undefined,
                     correct_index: newCorrectIndex,
                     theme: themeValue,
                 }
@@ -1676,6 +1774,7 @@ export function ReviewScreen() {
             return
         }
 
+        Keyboard.dismiss()
         setAskAILoading(true)
         try {
             const response = await fetch(themeQAEndpoint, {
@@ -1973,7 +2072,7 @@ export function ReviewScreen() {
         const dateStr = `${year}-${month}-${day}`
         const studyDayDate = getStudyDayDate(dateStr)
         const startedAtIso = new Date(studyDayDate.getTime() + 9 * 60 * 60 * 1000).toISOString()
-        const firstDueDate = new Date(studyDayDate.getTime() + 24 * 60 * 60 * 1000)
+        const firstDueDate = new Date(studyDayDate.getTime() + 27 * 60 * 60 * 1000)
 
         for (const themeContent of themes) {
             const { data, error } = await supabase
@@ -2534,6 +2633,8 @@ export function ReviewScreen() {
             style={styles.screen}
             contentContainerStyle={styles.container}
             keyboardShouldPersistTaps="handled"
+            innerRef={(ref) => { reviewKeyboardRef.current = ref }}
+            enableResetScrollToCoords={false}
             enableOnAndroid
             extraScrollHeight={Platform.OS === 'ios' ? 120 : 160}
             showsVerticalScrollIndicator={false}
@@ -2782,7 +2883,7 @@ export function ReviewScreen() {
                                                                     const answered = themeQuiz.answers[qIndex] !== undefined
                                                                     return (
                                                                         <View key={`${task.id}-${qIndex}`} style={styles.quizItem}>
-                                                                            <Text style={styles.quizQuestion}>{qIndex + 1}. {q.question}</Text>
+                                                                            <Text style={styles.quizQuestion}>{qIndex + 1}. {normalizeQuizText(q.question)}</Text>
                                                                             {q.choices.map((choice, cIndex) => {
                                                                                 const selected = themeQuiz.answers[qIndex] === cIndex
                                                                                 const isCorrect = q.correct_index === cIndex
@@ -2796,7 +2897,7 @@ export function ReviewScreen() {
                                                                                             selected && (isCorrect ? styles.choiceCorrect : styles.choiceWrong),
                                                                                         ]}
                                                                                     >
-                                                                                        <Text style={styles.choiceText}>{choice}</Text>
+                                                                                        <Text style={styles.choiceText}>{normalizeQuizText(choice)}</Text>
                                                                                     </Pressable>
                                                                                 )
                                                                             })}
@@ -2852,7 +2953,7 @@ export function ReviewScreen() {
                                                                                     {q.explanation && (
                                                                                         <>
                                                                                             <Text style={styles.explanationText}>
-                                                                                                {q.explanation}
+                                                                                                {normalizeQuizText(q.explanation)}
                                                                                             </Text>
                                                                                             <Pressable
                                                                                                 style={[
@@ -2874,7 +2975,10 @@ export function ReviewScreen() {
                                                                                                 </Text>
                                                                                             </Pressable>
                                                                                             {isAskAIContextActive(task.id, theme, qIndex) && (
-                                                                                                <View style={styles.inlineAskAICard}>
+                                                                                                <View
+                                                                                                    ref={askAIInlineCardRef}
+                                                                                                    style={styles.inlineAskAICard}
+                                                                                                >
                                                                                                     <View style={styles.inlineAskAIHeader}>
                                                                                                         <View style={styles.inlineAskAIHeaderBadge}>
                                                                                                             <Ionicons name="bulb-outline" size={14} color="#a16207" />
@@ -2933,14 +3037,20 @@ export function ReviewScreen() {
                                                                                                     </View>
 
                                                                                                     {askAILoading && (
-                                                                                                        <View style={styles.inlineAskAILoadingRow}>
+                                                                                                        <View
+                                                                                                            ref={askAILoadingRowRef}
+                                                                                                            style={styles.inlineAskAILoadingRow}
+                                                                                                        >
                                                                                                             <ActivityIndicator size="small" color="#d97706" />
                                                                                                             <Text style={styles.inlineAskAILoadingText}>回答を作成中...</Text>
                                                                                                         </View>
                                                                                                     )}
 
                                                                                                     {askAIAnswer ? (
-                                                                                                        <View style={styles.inlineAskAIAnswerCard}>
+                                                                                                        <View
+                                                                                                            ref={askAIAnswerCardRef}
+                                                                                                            style={styles.inlineAskAIAnswerCard}
+                                                                                                        >
                                                                                                             <View style={styles.inlineAskAIAnswerHeader}>
                                                                                                                 <View style={styles.inlineAskAIAnswerBadge}>
                                                                                                                     <Ionicons name="sparkles" size={13} color="#a16207" />
@@ -3396,7 +3506,7 @@ export function ReviewScreen() {
                                                                             {group.attempts.length - Math.abs(idx)}回目（{formatHistoryDate(attempt.created_at)}）
                                                                         </Text>
                                                                     </View>
-                                                                    <Text style={styles.historyAttemptQuestion}>{attempt.question}</Text>
+                                                                    <Text style={styles.historyAttemptQuestion}>{normalizeQuizText(attempt.question)}</Text>
                                                                     {attempt.choices?.length > 0 && (
                                                                         <View style={styles.historyAttemptChoices}>
                                                                             {attempt.choices.map((choice, cIndex) => {
@@ -3413,7 +3523,7 @@ export function ReviewScreen() {
                                                                                 return (
                                                                                     <View key={cIndex} style={choiceStyle}>
                                                                                         <Text style={[styles.historyPremiumChoiceText, { fontSize: 13 }, isCorrectChoice && { color: '#166534', fontWeight: 'bold' }, isSelected && !isCorrectChoice && { color: '#991b1b' }]}>
-                                                                                            {choice}
+                                                                                            {normalizeQuizText(choice)}
                                                                                         </Text>
                                                                                     </View>
                                                                                 )
@@ -3423,7 +3533,7 @@ export function ReviewScreen() {
                                                                     {attempt.explanation && (
                                                                         <>
                                                                             <Text style={[styles.historyPremiumExplanationLabel, { marginTop: 8, fontSize: 11 }]}>解説</Text>
-                                                                            <Text style={styles.historyAttemptExplanation}>{attempt.explanation}</Text>
+                                                                            <Text style={styles.historyAttemptExplanation}>{normalizeQuizText(attempt.explanation)}</Text>
                                                                         </>
                                                                     )}
                                                                 </View>

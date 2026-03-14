@@ -1,6 +1,5 @@
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000
-const STUDY_DAY_START_HOUR = 0 // 0時区切り（JST）
-// UTCのDateをJSTの「学習日」に写像するためのシフト
+const STUDY_DAY_START_HOUR = 3 // 03:00 JST boundary to match the web app and study log rules
 const STUDY_DAY_SHIFT_MS = JST_OFFSET_MS - STUDY_DAY_START_HOUR * 60 * 60 * 1000
 
 const formatYmdUTC = (date: Date) => {
@@ -19,14 +18,18 @@ const getJstParts = (date: Date) => {
   }
 }
 
-const getStudyDayStart = (date: Date): Date => {
-  const [year, month, day] = getStudyDay(date).split('-').map(Number)
-  return new Date(Date.UTC(year, month - 1, day, STUDY_DAY_START_HOUR) - JST_OFFSET_MS)
-}
-
 export const getStudyDayDate = (studyDay: string): Date => {
   const [year, month, day] = studyDay.split('-').map(Number)
   return new Date(Date.UTC(year, month - 1, day) - JST_OFFSET_MS)
+}
+
+export const getStudyDayStartDate = (studyDay: string): Date => {
+  const [year, month, day] = studyDay.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day, STUDY_DAY_START_HOUR) - JST_OFFSET_MS)
+}
+
+const getStudyDayStart = (date: Date): Date => {
+  return getStudyDayStartDate(getStudyDay(date))
 }
 
 export const getStudyDay = (date: Date): string => {
